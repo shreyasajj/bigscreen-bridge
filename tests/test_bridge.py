@@ -8,8 +8,8 @@ import pytest
 from bigscreen_bridge.adapters import APPS, BridgeError
 
 # Load the transport client without importing Home Assistant's integration package.
-spec = importlib.util.spec_from_file_location("bridge_client", Path(__file__).parents[1]
-    / "custom_components/bigscreen_bridge/client.py")
+spec = importlib.util.spec_from_file_location("bridge_client", Path(__file__).parents[2]
+    / "ha-bigscreen-bridge/custom_components/bigscreen_bridge/client.py")
 client_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(client_module)
 

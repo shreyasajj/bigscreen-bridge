@@ -1061,6 +1061,32 @@ index c92dd0a..25f1af3 100644
      }
  
      return channels;
+diff --git a/src/sources/stalker.cpp b/src/sources/stalker.cpp
+index b3464f4..04f613a 100644
+--- a/src/sources/stalker.cpp
++++ b/src/sources/stalker.cpp
+@@ -256,6 +256,8 @@ bool Stalker::parseChannels(const QByteArray &data, const QUrl &root, QVector<Ch
+         const QJsonObject object = value.toObject();
+         Channel channel;
+         channel.uuid = text(object.value(QLatin1String("id")));
++        // The portal's channel ID stays the same across refreshes, so automations may rely on it.
++        channel.controlId = channel.uuid;
+         channel.stream = text(object.value(QLatin1String("cmd")));
+ 
+         if (channel.uuid.isEmpty() || channel.stream.isEmpty()) {
+diff --git a/src/sources/xtream.cpp b/src/sources/xtream.cpp
+index d6c123f..9ded3be 100644
+--- a/src/sources/xtream.cpp
++++ b/src/sources/xtream.cpp
+@@ -190,6 +190,8 @@ bool Xtream::parseStreams(const QByteArray &data, Streams *streams)
+ 
+         Channel channel;
+         channel.uuid = id;
++        // The provider's stream ID stays the same across refreshes, so automations may rely on it.
++        channel.controlId = id;
+         channel.number = static_cast<int>(number(object.value(QLatin1String("num"))));
+         channel.name = text(object.value(QLatin1String("name"))).trimmed();
+         channel.icon = text(object.value(QLatin1String("stream_icon")));
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
 index d0b0eb4..4eb9864 100644
 --- a/tests/CMakeLists.txt
@@ -1490,3 +1516,27 @@ index 847c9c8..27c695e 100644
      static void looksLikePlaylist()
      {
          QVERIFY(M3u::looksLikePlaylist("#EXTM3U\n"));
+diff --git a/tests/test_stalker.cpp b/tests/test_stalker.cpp
+index c978dc8..27f76f7 100644
+--- a/tests/test_stalker.cpp
++++ b/tests/test_stalker.cpp
+@@ -203,6 +203,7 @@ private Q_SLOTS:
+         // The channel without a cmd can't be played and is left out.
+         QCOMPARE(channels.size(), 2);
+         QCOMPARE(channels.at(0).uuid, QStringLiteral("1"));
++        QCOMPARE(channels.at(0).controlId, QStringLiteral("1"));
+         QCOMPARE(channels.at(0).number, 1);
+         QCOMPARE(channels.at(0).stream, QStringLiteral("ffmpeg http://localhost/ch/1_"));
+         QCOMPARE(channels.at(0).icon,
+diff --git a/tests/test_xtream.cpp b/tests/test_xtream.cpp
+index 5054de4..2cd48d7 100644
+--- a/tests/test_xtream.cpp
++++ b/tests/test_xtream.cpp
+@@ -138,6 +138,7 @@ private Q_SLOTS:
+         // The entry without a stream_id is skipped; numbers come as numbers or strings.
+         QCOMPARE(streams.channels.size(), 2);
+         QCOMPARE(streams.channels.at(0).uuid, QStringLiteral("101"));
++        QCOMPARE(streams.channels.at(0).controlId, QStringLiteral("101"));
+         QCOMPARE(streams.channels.at(0).number, 1);
+         QCOMPARE(streams.channels.at(0).icon, QStringLiteral("http://logos.example/bbc1.png"));
+         QCOMPARE(streams.channels.at(1).uuid, QStringLiteral("102"));

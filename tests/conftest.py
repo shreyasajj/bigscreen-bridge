@@ -1,9 +1,19 @@
 import asyncio
+import os
+from pathlib import Path
+import sys
 
 import pytest
 
+
 from bigscreen_bridge.adapters import APPS
 from bigscreen_bridge.server import Bridge, application
+
+# The integration is a separate repository; these tests run it against the real bridge.
+INTEGRATION = Path(os.environ.get("BIGSCREEN_INTEGRATION", Path(__file__).resolve().parents[2] / "ha-bigscreen-bridge"))
+if not (INTEGRATION / "custom_components/bigscreen_bridge/manifest.json").is_file():
+    raise pytest.UsageError(f"Check out ha-bigscreen-bridge at {INTEGRATION} or set BIGSCREEN_INTEGRATION")
+sys.path.insert(0, str(INTEGRATION))
 
 
 class WindowManager:

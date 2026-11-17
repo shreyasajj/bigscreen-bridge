@@ -25,7 +25,8 @@ where = ["bigscreen-bridge/src"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-pythonpath = ["."]
+# The Home Assistant integration lives in its own repository, checked out next to this one.
+pythonpath = [".", "../ha-bigscreen-bridge"]
 
 [tool.ruff]
 line-length = 110

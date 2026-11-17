@@ -94,15 +94,12 @@ replaces an old monitor after an unexpected crash.
 
 ## Install the Home Assistant integration
 
-With HACS: add `https://github.com/shreyasajj/ha-bigscreen-bridge` as a custom
-repository of type Integration and install **Bigscreen Bridge**. That repository is
-a published copy; this project stays the source. After changing the integration run
-`python3 scripts/export-hacs.py` (`--check` reports drift), then commit, tag and
-release there. HACS needs that repository to be public.
-
-Without HACS: copy the whole `custom_components/bigscreen_bridge` directory into your
-HA configuration directory, or extract the zip from `python3 scripts/package.py`
-there. The result must be `/config/custom_components/bigscreen_bridge/manifest.json`.
+The integration lives in its own repository,
+[ha-bigscreen-bridge](https://github.com/shreyasajj/ha-bigscreen-bridge), checked out
+next to this one (`../ha-bigscreen-bridge`). Install it with HACS by adding that
+repository as a custom repository of type Integration (HACS needs it to be public),
+or copy its `custom_components/bigscreen_bridge` directory into your HA configuration
+directory so that `/config/custom_components/bigscreen_bridge/manifest.json` exists.
 Restart HA after installing the custom integration. A bridge on the same network
 segment is then offered under **Settings → Devices & services → Discovered**; only
 the private token from the TV config is asked for. Otherwise use **Add integration →
@@ -180,7 +177,7 @@ untouched.
 python3.14 -m venv .venv
 .venv/bin/pip install -e '.[test,ha-test]'
 .venv/bin/pytest -q
-.venv/bin/ruff check bigscreen-bridge custom_components tests
+.venv/bin/ruff check bigscreen-bridge tests ../ha-bigscreen-bridge/custom_components
 ```
 
 HA contract tests use Home Assistant 2026.2.3, the version available from the package

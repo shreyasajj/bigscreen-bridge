@@ -29,7 +29,7 @@ async def main():
     settings = json.loads(completed.stdout)
     credentials = {'url': 'http://192.168.30.153:8765', 'token': settings['token']}
     with tempfile.TemporaryDirectory(prefix='bigscreen-ha-', dir='/tmp') as directory:
-        shutil.copytree(ROOT/'custom_components/bigscreen_bridge', Path(directory)/'custom_components/bigscreen_bridge')
+        shutil.copytree(ROOT.parent/'ha-bigscreen-bridge/custom_components/bigscreen_bridge', Path(directory)/'custom_components/bigscreen_bridge')
         hass = HomeAssistant(directory)
         loader.async_setup(hass)
         hass.config.skip_pip = True
