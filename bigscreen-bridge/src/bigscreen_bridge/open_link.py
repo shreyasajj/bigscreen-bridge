@@ -45,7 +45,7 @@ async def open_uri(uri, config_path):
                         raise BridgeError('invalid_auth', 'Bridge rejected the configured token') from exc
                     raise
         async with ws:
-            async with asyncio.timeout(75):
+            async with asyncio.timeout(100):
                 await ws.receive_json()
                 request_id = str(uuid.uuid4())
                 await ws.send_json({'id': request_id, 'command': 'open_uri', 'uri': uri})

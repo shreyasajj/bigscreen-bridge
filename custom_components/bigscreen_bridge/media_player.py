@@ -63,21 +63,41 @@ class BigscreenPlayer(CoordinatorEntity, MediaPlayerEntity):
         return available
 
     @property
+    def _audio(self):
+        """System audio belongs to the device player; app players keep their own volume."""
+        return {} if self._app_id else self.coordinator.data.get("audio") or {}
+
+    @property
+    def _power(self):
+        return {} if self._app_id else self.coordinator.data.get("power") or {}
+
+    @property
     def supported_features(self):
         flags = (MediaPlayerEntityFeature.PLAY_MEDIA | MediaPlayerEntityFeature.TURN_ON) if self._app_id else self._attr_supported_features
         if self._app_id == "flimmer":
             flags |= MediaPlayerEntityFeature.BROWSE_MEDIA
+        for capability, source, feature in (
+                ("set_volume", self._audio, MediaPlayerEntityFeature.VOLUME_SET),
+                ("mute", self._audio, MediaPlayerEntityFeature.VOLUME_MUTE),
+                ("screen_on", self._power, MediaPlayerEntityFeature.TURN_ON),
+                ("screen_off", self._power, MediaPlayerEntityFeature.TURN_OFF)):
+            if capability in source.get("capabilities", []):
+                flags |= feature
         if self._target in ("stremio", "flimmer", "vacuumtube"):
             capabilities = self._application.get("capabilities", [])
             for command, feature in (("play", MediaPlayerEntityFeature.PLAY), ("pause", MediaPlayerEntityFeature.PAUSE),
                                      ("stop", MediaPlayerEntityFeature.STOP), ("seek", MediaPlayerEntityFeature.SEEK),
                                      ("volume_set", MediaPlayerEntityFeature.VOLUME_SET), ("volume_mute", MediaPlayerEntityFeature.VOLUME_MUTE)):
+                if command.startswith("volume_") and not self._app_id:
+                    continue
                 if command in capabilities:
                     flags |= feature
         return flags
 
     @property
     def state(self):
+        if (self._power.get("display") or {}).get("display_on") is False:
+            return MediaPlayerState.OFF
         if self._media.get("state") == "buffering":
             return MediaPlayerState.BUFFERING
         if self._media.get("state") in ("playing", "paused"):
@@ -103,11 +123,11 @@ class BigscreenPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     @property
     def volume_level(self):
-        return self._media.get("volume")
+        return self._media.get("volume") if self._app_id else self._audio.get("volume")
 
     @property
     def is_volume_muted(self):
-        return self._media.get("muted")
+        return self._media.get("muted") if self._app_id else self._audio.get("muted")
 
     @property
     def media_position(self):
@@ -152,9 +172,15 @@ class BigscreenPlayer(CoordinatorEntity, MediaPlayerEntity):
         return int(match[2]) if match else None
 
     async def async_turn_on(self):
-        if not self._app_id:
-            raise HomeAssistantError("Select a source to launch an application")
-        await self.coordinator.command("focus", app=self._app_id)
+        if self._app_id:
+            await self.coordinator.command("focus", app=self._app_id)
+        else:
+            await self.coordinator.command("screen_on")
+
+    async def async_turn_off(self):
+        if self._app_id:
+            raise HomeAssistantError("Turn off the display on the main Bigscreen player")
+        await self.coordinator.command("screen_off")
 
     async def _player_command(self, command, **kwargs):
         if self._target not in ("stremio", "flimmer", "vacuumtube"):
@@ -174,10 +200,16 @@ class BigscreenPlayer(CoordinatorEntity, MediaPlayerEntity):
         await self._player_command("seek", position=position)
 
     async def async_set_volume_level(self, volume):
-        await self._player_command("volume_set", volume_level=volume)
+        if self._app_id:
+            await self._player_command("volume_set", volume_level=volume)
+        else:
+            await self.coordinator.command("set_volume", volume_level=volume)
 
     async def async_mute_volume(self, mute):
-        await self._player_command("volume_mute", muted=mute)
+        if self._app_id:
+            await self._player_command("volume_mute", muted=mute)
+        else:
+            await self.coordinator.command("mute" if mute else "unmute")
 
     @property
     def source_list(self):

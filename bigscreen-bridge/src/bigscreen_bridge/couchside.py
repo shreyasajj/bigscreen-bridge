@@ -1,12 +1,8 @@
 """UI-only Couchside adapter. Music Assistant retains all playback ownership."""
-import asyncio
-import json
 import re
-import uuid
-
-from dbus_next import Message, MessageType
 
 from .adapters import BridgeError
+from .hooks import DBusHook
 
 BUS_NAME = "io.github.shreyasajj.Couchside.Control"
 OBJECT_PATH = "/io/github/shreyasajj/Couchside/Control"
@@ -28,57 +24,29 @@ def validate_content(kind, value):
     return kind, value
 
 
-class CouchsideHook:
-    def __init__(self, bus, enabled=False):
-        self.bus = bus
-        self.enabled = enabled
-        self.state = None
+class CouchsideHook(DBusHook):
+    app = "couchside"
+    label = "Couchside"
+    kinds = KINDS
+    bus_name = BUS_NAME
+    object_path = OBJECT_PATH
+    timeout = 3
+    timeouts = {"navigate": 25}
+    timeout_code = "not_ready"
+    require_result_object = False
 
-    async def request(self, command, request_id=None, **kwargs):
-        request_id = request_id or str(uuid.uuid4())
-        payload = json.dumps({"id": request_id, "command": command, **kwargs})
-        try:
-            reply = await asyncio.wait_for(self.bus.call(Message(
-                destination=BUS_NAME, path=OBJECT_PATH, interface=BUS_NAME, member="Execute",
-                signature="s", body=[payload])), 25 if command == "navigate" else 3)
-        except TimeoutError as exc:
-            raise BridgeError("not_ready", "Couchside control timed out") from exc
-        if reply.message_type == MessageType.ERROR:
-            raise BridgeError("not_ready", "Couchside control endpoint is unavailable")
-        try:
-            response = json.loads(reply.body[0])
-            if not isinstance(response, dict) or response.get("id") != request_id:
-                raise ValueError("Mismatched request ID")
-            if not response.get("ok"):
-                error = response["error"]
-                raise BridgeError(error["code"], error["message"])
-            return response["result"]
-        except (ValueError, TypeError, KeyError, IndexError) as exc:
-            raise BridgeError("invalid_response", "Invalid Couchside control response") from exc
-
-    async def refresh(self):
-        try:
-            state = await self.request("get_state")
-            if (not isinstance(state, dict) or state.get("protocol") != 1 or state.get("playback_owner") != "music_assistant"
-                    or not isinstance(state.get("content_types"), list)):
-                raise BridgeError("invalid_response", "Unsupported Couchside control protocol")
-            self.state = state
-            self.enabled = True
-        except BridgeError:
-            self.state = None
+    def accept(self, state):
+        state = super().accept(state)
+        if state.get("playback_owner") != "music_assistant":
+            raise BridgeError("invalid_response", "Unsupported Couchside control protocol")
+        return state
 
     async def navigate(self, request_id, kind, value):
-        await self.refresh()
-        try:
-            async with asyncio.timeout(10):
-                while (not self.state or not self.state.get("ready") or
-                       (kind not in ("now_playing",) and not self.state.get("music_assistant_ready"))):
-                    await self.refresh()
-                    await asyncio.sleep(0.1)
-        except TimeoutError as exc:
-            raise BridgeError("readiness_timeout", "Couchside UI control did not become ready") from exc
+        # Now Playing needs only the UI; everything else is resolved through Music Assistant.
+        await self.wait_ready(10, lambda: self.is_ready() and (
+            kind == "now_playing" or self.state.get("music_assistant_ready")),
+            "Couchside UI control did not become ready")
         if kind not in self.state["content_types"]:
             raise BridgeError("unsupported", "The running Couchside does not support this content type")
-        state = await self.request("navigate", request_id, content_type=kind, content_id=value)
-        self.state = state
-        return state
+        self.state = await self.request("navigate", request_id, content_type=kind, content_id=value)
+        return self.state

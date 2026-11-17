@@ -4,6 +4,7 @@ import asyncio
 from collections import OrderedDict
 import contextlib
 import copy
+from dataclasses import dataclass
 import hmac
 import json
 import logging
@@ -53,6 +54,54 @@ async def launch_app(*argv):
         raise BridgeError("launch_failed", "Application exited unsuccessfully")
 
 
+FAST_POLL = 2     # seconds between checks of hooks that cannot announce changes
+SLOW_POLL = 10    # seconds between full refreshes, including system state
+PLAYER_COMMANDS = ("play", "pause", "stop", "seek", "volume_set", "volume_mute")
+
+
+def _open_couchside(request):
+    return validate_content(request.get("content_type"), request.get("content_id"))
+
+
+def _open_stremio(request):
+    resume = request.get("resume", False)
+    return (*validate_stremio(request.get("content_type"), request.get("content_id"), resume), resume)
+
+
+def _open_flimmer(request):
+    if request.get("content_type") != "channel":
+        raise BridgeError("unsupported", "Flimmer supports channel IDs without resume")
+    return (validate_channel(request.get("content_id")),)
+
+
+def _open_youtube(request):
+    return validate_youtube(request.get("content_type"), request.get("content_id"))
+
+
+@dataclass(frozen=True)
+class Adapter:
+    """What the bridge needs to know about one application hook; the rest is shared."""
+    app: str
+    prefix: str                     # Home Assistant media content type prefix
+    kinds: tuple                    # content types assumed until the app reports its own
+    parse_open: callable            # validated request -> arguments for `deliver`
+    deliver: str = "open"           # hook coroutine that performs the navigation
+    commands: tuple = ()            # player commands the app may negotiate
+    resume: bool = False
+    owner: str | None = None        # an external playback owner; never add transport controls
+
+    def content_types(self, hook):
+        return [self.prefix + kind for kind in getattr(hook, "content_types", self.kinds)] if hook.enabled else []
+
+
+ADAPTERS = {adapter.app: adapter for adapter in (
+    Adapter("couchside", "couchside_", KINDS, _open_couchside, deliver="navigate", owner="music_assistant"),
+    Adapter("stremio", "stremio_", (), _open_stremio, commands=("play", "pause", "stop", "seek"), resume=True),
+    Adapter("flimmer", "flimmer_", ("channel",), _open_flimmer, commands=("play", "pause", "stop")),
+    Adapter("vacuumtube", "youtube_", (), _open_youtube, commands=PLAYER_COMMANDS),
+)}
+
+
 class Bridge:
     def __init__(self, config, wm, launcher=launch_app):
         self.config = config
@@ -70,6 +119,36 @@ class Bridge:
         self.audio = None
         self.sessions = None
 
+    def hook(self, app_id, enabled=True):
+        hook = getattr(self, app_id, None) if app_id in ADAPTERS else None
+        return hook if hook and (hook.enabled or not enabled) else None
+
+    def _describe(self, app, adapter, hook):
+        """Add what an application hook reports to its snapshot entry."""
+        state = hook.state or {}
+        app["content_types"] = adapter.content_types(hook)
+        if adapter.owner:
+            app["playback_owner"] = adapter.owner
+            if state:
+                app["ma_player_id"] = state.get("ma_player_id")
+                app["view"] = state.get("view")
+            return
+        app["hook_installed"] = hook.enabled
+        app["control_available"] = bool(state.get("ready"))
+        if not app["control_available"]:
+            return
+        media = state["media"]
+        app["media"] = media
+        app["state"] = media.get("state", "idle")
+        if "view" in state:
+            app["view"] = state["view"]
+        negotiated = state.get("capabilities", [])
+        # Volume belongs to the app; transport only exists while something is loaded.
+        loaded = app["state"] in ("playing", "paused", "buffering")
+        app["capabilities"] += [c for c in adapter.commands if c in negotiated
+                                and (loaded or c.startswith("volume_"))
+                                and (c != "seek" or media.get("duration", 0) > 0)]
+
     def snapshot(self):
         active = next((app.id for app in APPS for w in self.wm.windows
                        if w.get("active") and app.matches(w)), None)
@@ -81,48 +160,10 @@ class Bridge:
                           "capabilities": ["focus"] if a.flatpak in self.installed else [],
                           "state": "idle" if any(a.matches(w) for w in self.wm.windows) else "off"}
                          for a in APPS]}
-        if self.couchside:
-            app = next(a for a in snapshot["apps"] if a["id"] == "couchside")
-            app["playback_owner"] = "music_assistant"
-            app["content_types"] = ["couchside_" + k for k in KINDS] if self.couchside.enabled else []
-            if self.couchside.state:
-                app["ma_player_id"] = self.couchside.state.get("ma_player_id")
-                app["view"] = self.couchside.state.get("view")
-        if self.stremio:
-            app = next(a for a in snapshot["apps"] if a["id"] == "stremio")
-            app["hook_installed"] = self.stremio.enabled
-            app["control_available"] = bool(self.stremio.state and self.stremio.state.get("ready"))
-            app["content_types"] = ["stremio_" + k for k in self.stremio.content_types]
-            if app["control_available"]:
-                media = self.stremio.state["media"]
-                app["media"] = media
-                app["state"] = media.get("state", "idle")
-                if app["state"] in ("playing", "paused"):
-                    app["capabilities"] += [c for c in ("play", "pause", "stop", "seek")
-                                            if c in self.stremio.state.get("capabilities", [])
-                                            and (c != "seek" or media.get("duration", 0) > 0)]
-        if self.flimmer:
-            app = next(a for a in snapshot["apps"] if a["id"] == "flimmer")
-            app["hook_installed"] = self.flimmer.enabled
-            app["control_available"] = bool(self.flimmer.state and self.flimmer.state.get("ready"))
-            app["content_types"] = ["flimmer_channel"] if self.flimmer.enabled else []
-            if app["control_available"]:
-                app["media"] = self.flimmer.state["media"]
-                app["state"] = app["media"].get("state", "idle")
-                app["capabilities"] += [c for c in ("play", "pause", "stop")
-                                        if c in self.flimmer.state.get("capabilities", [])]
-        if self.vacuumtube:
-            app = next(a for a in snapshot["apps"] if a["id"] == "vacuumtube")
-            app["hook_installed"] = self.vacuumtube.enabled
-            app["control_available"] = bool(self.vacuumtube.state and self.vacuumtube.state.get("ready"))
-            app["content_types"] = ["youtube_" + k for k in self.vacuumtube.content_types]
-            if app["control_available"]:
-                app["view"] = self.vacuumtube.state.get("view")
-                app["media"] = self.vacuumtube.state["media"]
-                app["state"] = app["media"].get("state", "idle")
-                app["capabilities"] += [c for c in ("play", "pause", "stop", "seek", "volume_set", "volume_mute")
-                                        if c in self.vacuumtube.state.get("capabilities", [])
-                                        and (c != "seek" or app["media"].get("duration", 0) > 0)]
+        for app in snapshot["apps"]:
+            hook = self.hook(app["id"], enabled=False)
+            if hook:
+                self._describe(app, ADAPTERS[app["id"]], hook)
         if self.power:
             snapshot['power'] = self.power.state
         if self.audio:
@@ -158,8 +199,7 @@ class Bridge:
     async def _focus(self, app):
         # Compositor closing animations can outlive a process; query live windows before launch decisions.
         await self.wm.refresh()
-        candidate = {"couchside": self.couchside, "stremio": self.stremio, "flimmer": self.flimmer, "vacuumtube": self.vacuumtube}.get(app.id)
-        hook = candidate if candidate and candidate.enabled else None
+        hook = self.hook(app.id)
         if hook:
             await hook.refresh()
         # The IPC name disappears before KWin finishes animating a closing window.
@@ -198,118 +238,54 @@ class Bridge:
         return {"app": app.id}
 
     async def open_content(self, request):
-        if request.get("app") == "stremio":
-            return await self.open_stremio(request)
-        if request.get("app") == "flimmer":
-            return await self.open_flimmer(request)
-        if request.get("app") == "vacuumtube":
-            return await self.open_youtube(request)
-        if "resume" in request:
-            raise BridgeError("unsupported", "Resume is supported only by Stremio")
-        if request.get("app") != "couchside" or not self.couchside or not self.couchside.enabled:
+        """Validate everything first, so unsupported content never launches or focuses an app."""
+        adapter = ADAPTERS.get(request.get("app"))
+        hook = self.hook(request.get("app"))
+        if not adapter or not hook:
             raise BridgeError("unsupported", "No verified content hook for this application")
-        kind, value = validate_content(request.get("content_type"), request.get("content_id"))
-        app = next(a for a in APPS if a.id == "couchside")
+        if "resume" in request and not adapter.resume:
+            raise BridgeError("unsupported", "Resume is supported only by Stremio")
+        arguments = adapter.parse_open(request)
+        if adapter.prefix + request["content_type"] not in adapter.content_types(hook):
+            raise BridgeError("unsupported", "The application does not advertise this navigation type")
+        app = next(a for a in APPS if a.id == adapter.app)
         if app.flatpak not in self.installed:
-            raise BridgeError("not_installed", "Couchside is not installed")
+            raise BridgeError("not_installed", "Application is not installed")
         if not self.wm.ready.is_set():
             raise BridgeError("window_manager_unavailable", "No authoritative window snapshot")
         async with self.lock:
             await self._focus(app)
-            state = await self.couchside.navigate(request["id"], kind, value)
+            result = await getattr(hook, adapter.deliver)(request["id"], *arguments)
             # UI navigation cannot bypass Wayland's focus policy; KWin confirms it.
             await self._focus(app)
             await self.notify()
-            return {"app": "couchside", "view": state["view"], "playback_owner": "music_assistant"}
-
-    async def open_stremio(self, request):
-        if not self.stremio or not self.stremio.enabled:
-            raise BridgeError("unsupported", "Stremio control is not installed")
-        kind, value = validate_stremio(request.get("content_type"), request.get("content_id"), request.get("resume", False))
-        app = next(a for a in APPS if a.id == "stremio")
-        if app.flatpak not in self.installed:
-            raise BridgeError("not_installed", "Stremio is not installed")
-        if not self.wm.ready.is_set():
-            raise BridgeError("window_manager_unavailable", "No authoritative window snapshot")
-        async with self.lock:
-            await self._focus(app)
-            result = await self.stremio.open(request["id"], kind, value, request.get("resume", False))
-            await self._focus(app)
-            await self.notify()
-            return {"app": "stremio", **result}
-
-    async def open_flimmer(self, request):
-        if not self.flimmer or not self.flimmer.enabled:
-            raise BridgeError("unsupported", "Flimmer control is not installed")
-        if request.get("content_type") != "channel" or "resume" in request:
-            raise BridgeError("unsupported", "Flimmer supports channel IDs without resume")
-        channel_id = validate_channel(request.get("content_id"))
-        app = next(a for a in APPS if a.id == "flimmer")
-        if app.flatpak not in self.installed:
-            raise BridgeError("not_installed", "Flimmer is not installed")
-        if not self.wm.ready.is_set():
-            raise BridgeError("window_manager_unavailable", "No authoritative window snapshot")
-        async with self.lock:
-            await self._focus(app)
-            result = await self.flimmer.open(request["id"], channel_id)
-            await self._focus(app)
-            await self.notify()
-            return {"app": "flimmer", **result}
-
-    async def open_youtube(self, request):
-        if not self.vacuumtube or not self.vacuumtube.enabled:
-            raise BridgeError("unsupported", "VacuumTube control is not installed")
-        if "resume" in request:
-            raise BridgeError("unsupported", "Resume arguments are unsupported for YouTube")
-        kind, value = validate_youtube(request.get("content_type"), request.get("content_id"))
-        if kind not in self.vacuumtube.content_types:
-            raise BridgeError("unsupported", "The application does not advertise this navigation type")
-        app = next(a for a in APPS if a.id == "vacuumtube")
-        if app.flatpak not in self.installed:
-            raise BridgeError("not_installed", "VacuumTube is not installed")
-        if not self.wm.ready.is_set():
-            raise BridgeError("window_manager_unavailable", "No authoritative window snapshot")
-        async with self.lock:
-            await self._focus(app)
-            result = await self.vacuumtube.open(request["id"], kind, value)
-            await self._focus(app)
-            await self.notify()
-            return {"app": "vacuumtube", **result}
+            if adapter.owner:
+                return {"app": adapter.app, "view": result["view"], "playback_owner": adapter.owner}
+            return {"app": adapter.app, **result}
 
     async def player_command(self, request):
         if self.sessions:
             self.sessions.invalidate_app(request.get("app"))
-        if request.get("app") == "vacuumtube" and self.vacuumtube and self.vacuumtube.enabled:
-            kwargs = {}
-            if request["command"] == "seek":
-                validate_seek(request.get("position"))
-                kwargs["position"] = request["position"]
-            if request["command"] == "volume_set":
-                validate_volume(request.get("volume_level"))
-                kwargs["volume_level"] = request["volume_level"]
-            if request["command"] == "volume_mute":
-                if not isinstance(request.get("muted"), bool):
-                    raise BridgeError("invalid_request", "Muted must be boolean")
-                kwargs["muted"] = request["muted"]
-            async with self.lock:
-                result = await self.vacuumtube.control(request["id"], request["command"], **kwargs)
-                await self.notify()
-                return result
-        if request.get("app") == "flimmer" and self.flimmer and self.flimmer.enabled:
-            if request["command"] not in ("play", "pause", "stop"):
-                raise BridgeError("unsupported", "Flimmer supports live playback without seeking")
-            async with self.lock:
-                result = await self.flimmer.control(request["id"], request["command"])
-                await self.notify()
-                return result
-        if request.get("app") != "stremio" or not self.stremio or not self.stremio.enabled:
+        adapter = ADAPTERS.get(request.get("app"))
+        hook = self.hook(request.get("app"))
+        if not adapter or not hook or not adapter.commands:
             raise BridgeError("unsupported", "No verified playback controller for this application")
+        command = request["command"]
+        if command not in adapter.commands:
+            raise BridgeError("unsupported", "This application does not support that player command")
         kwargs = {}
-        if request["command"] == "seek":
+        if command == "seek":
             validate_seek(request.get("position"))
             kwargs["position"] = request["position"]
+        if command == "volume_set":
+            validate_volume(request.get("volume_level"))
+            kwargs["volume_level"] = request["volume_level"]
+        if command == "volume_mute":
+            if not isinstance(request.get("muted"), bool):
+                raise BridgeError("invalid_request", "Muted must be boolean")
+            kwargs["muted"] = request["muted"]
         async with self.lock:
-            result = await self.stremio.control(request["id"], request["command"], **kwargs)
+            result = await hook.control(request["id"], command, **kwargs)
             await self.notify()
             return result
 
@@ -462,6 +438,7 @@ async def serve(config_path):
         bridge.stremio = StremioHook(wm.bus, config.get("stremio_control", False))
         bridge.flimmer = FlimmerHook(wm.bus, config.get("flimmer_control", False))
         bridge.vacuumtube = VacuumTubeHook(config.get("vacuumtube_control", False))
+        hooks = [getattr(bridge, app) for app in ADAPTERS]
 
         system_bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
         bridge.power = PowerManager(wm.bus, system_bus, config.get('power', {}), changed=changed)
@@ -469,18 +446,41 @@ async def serve(config_path):
         mpris = MprisRegistry(wm.bus)
         bridge.sessions = SessionController(bridge, mpris)
         mpris.changed = bridge.sessions.transition
+
+        # Applications and MPRIS players announce their own changes; the timer is only a
+        # safety net, plus the sole source for hooks that never announce anything.
+        wake = asyncio.Event()
+        mpris.on_change = wake.set
+        for hook in hooks:
+            hook.on_change = wake.set
+            await hook.subscribe()
         await asyncio.gather(bridge.power.initialize(), bridge.audio.refresh(), mpris.initialize())
 
-        async def poll_app_hooks():
+        async def observe():
+            slow_at = 0
             while True:
+                now = loop.time()
+                slow = now >= slow_at
                 previous = bridge.snapshot()
-                await asyncio.gather(bridge.couchside.refresh(), bridge.sessions.observe(), bridge.power.refresh(), bridge.audio.refresh())
+                jobs = [bridge.sessions.observe(full=slow)]
+                if slow or bridge.couchside.stale:
+                    jobs.append(bridge.couchside.refresh())
+                if slow:
+                    # Display, logind and PipeWire state need subprocesses; keep them off the fast path.
+                    slow_at = now + SLOW_POLL
+                    jobs += [bridge.power.refresh(), bridge.audio.refresh()]
+                results = await asyncio.gather(*jobs, return_exceptions=True)
+                for failure in (r for r in results if isinstance(r, Exception)):
+                    LOG.warning("State refresh failed: %r", failure)
                 if previous != bridge.snapshot():
                     await bridge.notify()
-                await asyncio.sleep(2)
+                wake.clear()
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(wake.wait(), FAST_POLL)
+                await asyncio.sleep(0.05)  # coalesce bursts of notifications
 
-        await asyncio.gather(bridge.couchside.refresh(), bridge.stremio.refresh(), bridge.flimmer.refresh(), bridge.vacuumtube.refresh())
-        hook_poll = asyncio.create_task(poll_app_hooks())
+        await asyncio.gather(*(hook.refresh() for hook in hooks))
+        hook_poll = asyncio.create_task(observe())
         runner = web.AppRunner(application(bridge))
         await runner.setup()
         site = web.TCPSite(runner, config.get("host", "127.0.0.1"), config.get("port", 8765))

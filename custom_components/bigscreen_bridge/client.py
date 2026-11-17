@@ -7,8 +7,13 @@ from urllib.parse import urlsplit
 import aiohttp
 
 
+COMMAND_TIMEOUT = 100
+
+
 class BridgeClientError(Exception):
-    pass
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code    # the bridge's machine-readable error code, when it sent one
 
 
 class BridgeAuthError(BridgeClientError):
@@ -95,9 +100,10 @@ class BridgeClient:
         self.pending[request_id] = future
         try:
             await self.ws.send_json({"id": request_id, "command": command, **kwargs})
-            response = await asyncio.wait_for(future, 60)
+            # A cold launch waits for a window, then readiness, then the navigation itself.
+            response = await asyncio.wait_for(future, COMMAND_TIMEOUT)
             if not response["ok"]:
-                raise BridgeClientError(response["error"]["message"])
+                raise BridgeClientError(response["error"]["message"], response["error"].get("code"))
             return response["result"]
         finally:
             self.pending.pop(request_id, None)

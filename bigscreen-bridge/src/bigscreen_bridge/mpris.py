@@ -38,6 +38,12 @@ class MprisRegistry:
         self.players = {}
         self.owners = {}
         self.overflow = False
+        self.dirty = True               # a full re-read is owed
+        self.on_change = lambda: None
+
+    def _mark(self):
+        self.dirty = True
+        self.on_change()
 
     async def initialize(self):
         self.bus.add_message_handler(self._signal)
@@ -52,6 +58,7 @@ class MprisRegistry:
         if (message.interface == 'org.freedesktop.DBus.Properties' and message.path == PATH
                 and message.member == 'PropertiesChanged' and message.sender in self.owners
                 and len(message.body) == 3 and message.body[0] == PLAYER):
+            self._mark()
             changed = unwrap(message.body[1])
             if isinstance(changed, dict) and 'PlaybackStatus' in changed:
                 key = self.owners[message.sender]
@@ -60,6 +67,9 @@ class MprisRegistry:
                     previous = record['state']
                     record['state'] = STATES.get(changed['PlaybackStatus'], 'unknown')
                     self.changed(key, previous, record['state'])
+        if (message.sender == 'org.freedesktop.DBus' and message.member == 'NameOwnerChanged'
+                and len(message.body) == 3 and message.body[0].startswith(ROOT + '.')):
+            self._mark()
         if (message.sender == 'org.freedesktop.DBus' and message.member == 'NameOwnerChanged'
                 and len(message.body) == 3 and message.body[0].startswith(ROOT + '.') and not message.body[2]):
             owner = message.body[1]
@@ -96,6 +106,7 @@ class MprisRegistry:
                 'capabilities': capabilities, 'media': media_state(player)}
 
     async def refresh(self):
+        self.dirty = False
         try:
             names = (await call(self.bus, 'org.freedesktop.DBus', '/org/freedesktop/DBus',
                                 'org.freedesktop.DBus', 'ListNames'))[0]

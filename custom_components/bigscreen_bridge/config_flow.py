@@ -33,7 +33,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if client:
                     await client.close()
         return self.async_show_form(step_id="user", data_schema=vol.Schema({
-            vol.Required("url", default="http://192.168.30.153:8765"): str,
+            vol.Required("url"): str,
             vol.Required("token"): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
         }), errors=errors)
 

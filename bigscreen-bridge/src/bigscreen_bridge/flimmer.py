@@ -1,15 +1,13 @@
 """Flimmer's local channel catalogue and acknowledged player controls."""
 import asyncio
-import json
 import re
-import uuid
-
-from dbus_next import Message, MessageType
 
 from .adapters import BridgeError
+from .hooks import DBusHook
 
 BUS_NAME = "io.github.jclsn.Flimmer.Control"
 OBJECT_PATH = "/io/github/jclsn/Flimmer/Control"
+KINDS = ("channel",)
 _ID = re.compile(r"channel-[0-9a-f]{64}")
 
 
@@ -24,61 +22,26 @@ def validate_page(offset=0, limit=50):
         raise BridgeError("invalid_request", "Invalid channel page bounds")
 
 
-class FlimmerHook:
-    def __init__(self, bus, enabled=False):
-        self.bus = bus
-        self.enabled = enabled
-        self.state = None
+class FlimmerHook(DBusHook):
+    app = "flimmer"
+    label = "Flimmer"
+    kinds = KINDS
+    bus_name = BUS_NAME
+    object_path = OBJECT_PATH
 
-    async def request(self, command, request_id=None, **kwargs):
-        request_id = request_id or str(uuid.uuid4())
-        try:
-            reply = await asyncio.wait_for(self.bus.call(Message(
-                destination=BUS_NAME, path=OBJECT_PATH, interface=BUS_NAME, member="Execute", signature="s",
-                body=[json.dumps({"id": request_id, "command": command, **kwargs})])), 5)
-        except TimeoutError as exc:
-            raise BridgeError("command_timeout", "Flimmer did not acknowledge the command") from exc
-        if reply.message_type == MessageType.ERROR:
-            raise BridgeError("not_ready", "Flimmer control endpoint is unavailable")
-        try:
-            response = json.loads(reply.body[0])
-            if not isinstance(response, dict) or response.get("id") != request_id:
-                raise ValueError("Mismatched response ID")
-            if not response.get("ok"):
-                raise BridgeError(response["error"]["code"], response["error"]["message"])
-            if not isinstance(response["result"], dict):
-                raise ValueError("Expected result object")
-            return response["result"]
-        except (ValueError, TypeError, KeyError, IndexError) as exc:
-            raise BridgeError("invalid_response", "Invalid Flimmer control response") from exc
-
-    async def refresh(self):
-        try:
-            state = await self.request("get_state")
-            if (state.get("protocol") != 1 or not isinstance(state.get("ready"), bool)
-                    or state.get("content_types") != ["channel"] or not isinstance(state.get("media"), dict)
-                    or not isinstance(state.get("capabilities"), list)):
-                raise BridgeError("invalid_response", "Unsupported Flimmer control protocol")
-            self.state = state
-            self.enabled = True
-        except BridgeError:
-            self.state = None
-
-    async def wait_ready(self):
-        try:
-            async with asyncio.timeout(15):
-                await self.refresh()
-                while not self.state or not self.state["ready"]:
-                    await asyncio.sleep(0.2)
-                    await self.refresh()
-        except TimeoutError as exc:
-            raise BridgeError("readiness_timeout", "Flimmer did not become ready") from exc
+    def accept(self, state):
+        state = super().accept(state)
+        if (not isinstance(state.get("ready"), bool) or state["content_types"] != ["channel"]
+                or not isinstance(state.get("media"), dict) or not isinstance(state.get("capabilities"), list)):
+            raise BridgeError("invalid_response", "Unsupported Flimmer control protocol")
+        return state
 
     async def open(self, request_id, channel_id):
         validate_channel(channel_id)
         try:
             async with asyncio.timeout(20):
                 await self.wait_ready()
+                # A cold start reports ready before its catalogue has loaded.
                 while True:
                     try:
                         result = await self.request("select_channel", request_id, channel_id=channel_id)
@@ -95,7 +58,7 @@ class FlimmerHook:
     async def browse(self, offset=0, limit=50):
         validate_page(offset, limit)
         await self.refresh()
-        if not self.state or not self.state["ready"]:
+        if not self.is_ready():
             raise BridgeError("not_ready", "Open Flimmer to load its channel catalogue")
         result = await self.request("list_channels", offset=offset, limit=limit)
         try:
@@ -111,14 +74,4 @@ class FlimmerHook:
                 raise ValueError("Invalid page continuation")
         except (KeyError, TypeError, ValueError, BridgeError) as exc:
             raise BridgeError("invalid_response", "Invalid Flimmer channel catalogue") from exc
-        return result
-
-    async def control(self, request_id, command):
-        await self.refresh()
-        if not self.state or not self.state["ready"]:
-            raise BridgeError("not_ready", "Flimmer player is unavailable")
-        if command not in ("play", "pause", "stop") or command not in self.state["capabilities"]:
-            raise BridgeError("unsupported", "Flimmer does not support this player command")
-        result = await self.request(command, request_id)
-        await self.refresh()
         return result

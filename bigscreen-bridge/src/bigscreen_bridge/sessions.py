@@ -20,12 +20,16 @@ class SessionController:
         if key not in self.pending and previous != current:
             self.receipts.pop(key, None)
 
-    async def observe(self):
+    async def observe(self, full=True):
         async with self.lock, self.bridge.lock:
-            return await self.refresh()
+            return await self.refresh(full)
 
-    async def refresh(self):
-        await asyncio.gather(*(hook.refresh() for hook in self.hooks().values()), self.mpris.refresh())
+    async def refresh(self, full=True):
+        # Sources that announce their own changes are re-read only when they said so.
+        jobs = [hook.refresh() for hook in self.hooks().values() if full or getattr(hook, 'stale', True)]
+        if full or getattr(self.mpris, 'dirty', True):
+            jobs.append(self.mpris.refresh())
+        await asyncio.gather(*jobs)
         players = {}
         native = set()
         for app, hook in self.hooks().items():
