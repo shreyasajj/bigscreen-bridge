@@ -1,0 +1,15 @@
+[Unit]
+Description=Bigscreen Bridge authenticated local API
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/bigscreen-bridge/venv/bin/bigscreen-bridge --config %h/.config/bigscreen-bridge/config.json
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=graphical-session.target

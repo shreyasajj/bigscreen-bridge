@@ -1,0 +1,628 @@
+diff --git a/README.md b/README.md
+index 6d9243b..d1a348b 100644
+--- a/README.md
++++ b/README.md
+@@ -270,3 +270,31 @@ player selection), `src/couchside/sendspin` (bundled player helpers),
+   One request per song; a result with the wrong number of lines is discarded.
+ - **Flatpak instead of `uv` + systemd** (owner's decision, see design doc):
+   Sendspin is bundled and autostarted through the Background portal.
++
++### Bigscreen Bridge UI control
++
++Couchside exposes a local, UI-only session-bus endpoint at
++`io.github.shreyasajj.Couchside.Control`, path
++`/io/github/shreyasajj/Couchside/Control`, method `Execute(JSON) → JSON`.
++The Flatpak manifest grants ownership of that name only. No broad session-bus
++permission is required. A D-Bus name lock keeps patched UI launches single-instance;
++subsequent launches request focus on the existing UI before exiting.
++
++Requests carry a unique `id` and a `command` (`get_state`, `focus`, `navigate`).
++`focus` preserves the current UI. `navigate` accepts `content_type` and
++`content_id`: `now_playing` with an empty ID, `search` with a query, or
++`track`/`album`/`artist`/`playlist` with a matching Music Assistant URI, for example
++`library://album/123`. Items are resolved through the connected MA client before
++opening a detail page; navigation never starts playback. Use Music Assistant's
++HA integration for playback. Unknown types, disconnected MA, missing content and
++navigation failures return explicit errors. Responses echo the request ID;
++repeated IDs return a bounded cached response and cannot change the request body.
++
++`get_state` reports readiness, supported content types, MA playback ownership and
++the local Sendspin player's MA ID. `view` records the most recent acknowledged
++bridge navigation, not subsequent manual remote navigation. Closing the UI leaves
++the separately supervised Sendspin process alone.
++
++Local IPC trusts the logged-in Unix user. This endpoint has no remote JavaScript,
++shell, URL navigation, token access or playback commands. Network access goes
++through Bigscreen Bridge's authenticated API.
+diff --git a/flatpak/io.github.shreyasajj.Couchside.yml b/flatpak/io.github.shreyasajj.Couchside.yml
+index b61c7bd..0b8c0ea 100644
+--- a/flatpak/io.github.shreyasajj.Couchside.yml
++++ b/flatpak/io.github.shreyasajj.Couchside.yml
+@@ -11,6 +11,7 @@ finish-args:
+   - --socket=wayland
+   - --socket=fallback-x11
+   - --device=dri
++  - --own-name=io.github.shreyasajj.Couchside.Control  # narrow UI-only local IPC
+   - --socket=pulseaudio      # Sendspin audio output (PipeWire-pulse)
+   - --own-name=org.mpris.MediaPlayer2.Sendspin.*  # Sendspin MPRIS: ...Sendspin.instance<pid>
+ cleanup-commands:
+diff --git a/src/couchside/ui/app.py b/src/couchside/ui/app.py
+index f407e2a..5359680 100644
+--- a/src/couchside/ui/app.py
++++ b/src/couchside/ui/app.py
+@@ -38,6 +38,7 @@ def main() -> int:
+     from couchside.sendspin.pairing import tail_log
+     from couchside.sendspin.runner import log_path
+     from couchside.ui.controller import AppController
++    from couchside.ui.bridge_control import UiControl
+ 
+     app = QGuiApplication(sys.argv)
+     app.setApplicationName("Couchside")
+@@ -49,14 +50,31 @@ def main() -> int:
+     loop = qasync.QEventLoop(app)
+     asyncio.set_event_loop(loop)
+ 
++    control = UiControl()
++    try:
++        primary = loop.run_until_complete(control.acquire())
++    except Exception:
++        logging.getLogger(__name__).exception("Could not acquire the UI control endpoint")
++        control.close()
++        loop.close()
++        return 1
++    if not primary:
++        control.close()
++        loop.close()
++        return 0
++
+     settings = load_settings()
+     controller = AppController(settings)
+ 
+     engine = QQmlApplicationEngine()
+     engine.rootContext().setContextProperty("app", controller)
++    engine.rootContext().setContextProperty("bridgeControl", control)
+     engine.load(str(Path(__file__).parent / "qml" / "Main.qml"))
+     if not engine.rootObjects():
++        control.close()
++        loop.close()
+         return 1
++    control.attach(controller)
+ 
+     closing = asyncio.Event()
+     app.aboutToQuit.connect(closing.set)
+@@ -77,8 +95,11 @@ def main() -> int:
+         for t in tasks:
+             t.cancel()
+ 
+-    with loop:
+-        loop.run_until_complete(run())
++    try:
++        with loop:
++            loop.run_until_complete(run())
++    finally:
++        control.close()
+     return 0
+ 
+ 
+diff --git a/src/couchside/ui/qml/LibraryPage.qml b/src/couchside/ui/qml/LibraryPage.qml
+index 2851208..7304587 100644
+--- a/src/couchside/ui/qml/LibraryPage.qml
++++ b/src/couchside/ui/qml/LibraryPage.qml
+@@ -9,6 +9,8 @@ Kirigami.Page {
+     id: page
+     property real u: 1
+     property var sheet: null
++    property bool bridgeManaged: false
++    objectName: "library"
+ 
+     padding: 0
+     globalToolBarStyle: Kirigami.ApplicationHeaderStyle.None
+@@ -22,13 +24,19 @@ Kirigami.Page {
+         else searchBox.forceActiveFocus()
+     }
+     property bool cardFocused: false
+-    Component.onCompleted: { app.loadRecents(); searchBox.forceActiveFocus() }
++    Component.onCompleted: { if (!bridgeManaged) app.loadRecents(); searchBox.forceActiveFocus() }
+     function handleBack() {
+         // Back while typing: keyboard away, straight to the results (Bigscreen's keyboard
+         // swallows the first key after it hides, so landing there saves a press).
+         if (field.activeFocus) { debounce.stop(); app.search(field.text); toResults(); return true }
+         return false
+     }
++    function setBridgeQuery(query) {
++        debounce.stop()
++        field.text = query
++        stopEditing()
++        toResults()
++    }
+     function startEditing() { field.forceActiveFocus(); Qt.inputMethod.show() }
+     // Letters from a keyboard remote: start a new search with them (or keep typing),
+     // without the on-screen keyboard.
+diff --git a/src/couchside/ui/qml/Main.qml b/src/couchside/ui/qml/Main.qml
+index 7ea4865..2fd952a 100644
+--- a/src/couchside/ui/qml/Main.qml
++++ b/src/couchside/ui/qml/Main.qml
+@@ -48,6 +48,42 @@ Kirigami.ApplicationWindow {
+         SpeakersPage { u: root.u; sheet: actionSheet; groupEditor: groupEditorOverlay }
+     }
+ 
++    Component { id: bridgeContentComponent; ContentPage { u: root.u; sheet: actionSheet } }
++    Connections {
++        target: bridgeControl
++        function onNavigationRequested(requestId, kind, payloadJson) {
++            try {
++                const payload = JSON.parse(payloadJson)
++                if (kind !== "focus") {
++                    exitDialog.close()
++                    actionSheet.close()
++                    groupEditorOverlay.close()
++                    app.closeAdminCode()
++                    pageStack.clear()
++                    pageStack.push(nowPlayingComponent)
++                    if (kind === "search") {
++                        pageStack.push(libraryComponent, {bridgeManaged: true})
++                        pageStack.currentItem.setBridgeQuery(payload.value)
++                    } else if (kind !== "now_playing") {
++                        pageStack.push(bridgeContentComponent, {item: payload.item})
++                    }
++                }
++                root.showFullScreen()
++                root.raise()
++                root.requestActivate()
++                Qt.callLater(function() {
++                    const expected = kind === "search" ? "library" : "bridgeContent"
++                    const valid = kind === "focus" || (kind === "now_playing" ? pageStack.depth === 1
++                        : pageStack.currentItem && pageStack.currentItem.objectName === expected)
++                    bridgeControl.completeNavigation(requestId, Boolean(valid))
++                })
++            } catch (error) {
++                console.warn("Bridge navigation failed:", error)
++                bridgeControl.completeNavigation(requestId, false)
++            }
++        }
++    }
++
+     function showSetup() {
+         if (!pageStack.currentItem || pageStack.currentItem.objectName !== "setup") pageStack.push(setupComponent)
+     }
+diff --git a/src/couchside/core/bridge_control.py b/src/couchside/core/bridge_control.py
+new file mode 100644
+index 0000000..ab7ef90
+--- /dev/null
++++ b/src/couchside/core/bridge_control.py
+@@ -0,0 +1,76 @@
++"""Strict, UI-only control protocol. Playback remains owned by Music Assistant."""
++from collections import OrderedDict
++import json
++import re
++
++BUS_NAME = "io.github.shreyasajj.Couchside.Control"
++OBJECT_PATH = "/io/github/shreyasajj/Couchside/Control"
++CONTENT_TYPES = ("now_playing", "search", "track", "album", "artist", "playlist")
++
++
++class ControlError(Exception):
++    def __init__(self, code, message):
++        super().__init__(message)
++        self.code = code
++
++
++def validate_content(kind, value):
++    if kind not in CONTENT_TYPES:
++        raise ControlError("unsupported", "Unsupported Couchside content type")
++    if not isinstance(value, str) or len(value) > 2048 or any(ord(c) < 32 for c in value):
++        raise ControlError("invalid_request", "Invalid content ID")
++    if kind == "now_playing":
++        if value not in ("", "now_playing"):
++            raise ControlError("invalid_request", "Now Playing does not accept an item ID")
++    elif kind == "search":
++        if len(value) > 512:
++            raise ControlError("invalid_request", "Search is limited to 512 characters")
++    elif not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}://" + kind + r"/[^\s?#]{1,1536}", value):
++        raise ControlError("invalid_request", "Use a Music Assistant URI matching the content type")
++    return kind, value
++
++
++class Dispatcher:
++    def __init__(self, snapshot, execute):
++        self.snapshot = snapshot
++        self.execute = execute
++        self.cache = OrderedDict()
++
++    async def handle(self, payload):
++        request_id = None
++        request = None
++        try:
++            if len(payload.encode()) > 16384:
++                raise ControlError("invalid_request", "Request too large")
++            request = json.loads(payload)
++            if not isinstance(request, dict):
++                raise ControlError("invalid_request", "Expected an object")
++            request_id = request.get("id")
++            if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
++                request_id = None
++                raise ControlError("invalid_request", "Request ID required")
++            if request_id in self.cache:
++                original, response = self.cache[request_id]
++                if original != request:
++                    raise ControlError("invalid_request", "Request ID reused with different content")
++                return response
++            command = request.get("command")
++            allowed = {"id", "command"}
++            if command == "navigate":
++                allowed |= {"content_type", "content_id"}
++                validate_content(request.get("content_type"), request.get("content_id"))
++            elif command not in ("get_state", "focus"):
++                raise ControlError("unsupported", "Only UI commands are supported")
++            if request.keys() - allowed:
++                raise ControlError("invalid_request", "Unknown fields")
++            result = self.snapshot() if command == "get_state" else await self.execute(request)
++            response = json.dumps({"id": request_id, "ok": True, "result": result})
++        except (ValueError, ControlError) as exc:
++            response = json.dumps({"id": request_id, "ok": False,
++                                   "error": {"code": getattr(exc, "code", "invalid_request"),
++                                             "message": str(exc)}})
++        if request_id and request_id not in self.cache:
++            self.cache[request_id] = (request, response)
++            if len(self.cache) > 128:
++                self.cache.popitem(last=False)
++        return response
+diff --git a/src/couchside/ui/bridge_control.py b/src/couchside/ui/bridge_control.py
+new file mode 100644
+index 0000000..bd58ee6
+--- /dev/null
++++ b/src/couchside/ui/bridge_control.py
+@@ -0,0 +1,144 @@
++"""Single-instance session-bus endpoint and QML navigation acknowledgements."""
++import asyncio
++import json
++import logging
++import uuid
++
++from dbus_next.aio import MessageBus
++from dbus_next import Message, MessageType
++from dbus_next.constants import NameFlag, RequestNameReply
++from dbus_next.service import ServiceInterface, method
++from PySide6.QtCore import QObject, Signal, Slot
++
++from couchside.core import library
++from couchside.core.bridge_control import BUS_NAME, OBJECT_PATH, CONTENT_TYPES, ControlError, Dispatcher
++from couchside.core.connection import ConnState
++from couchside.core.playback import find_local_player
++
++LOG = logging.getLogger(__name__)
++
++
++class Endpoint(ServiceInterface):
++    def __init__(self, control):
++        super().__init__(BUS_NAME)
++        self.control = control
++
++    @method()
++    async def Execute(self, payload: 's') -> 's':
++        # Serial dispatch also guarantees idempotency for simultaneous retries.
++        async with self.control.lock:
++            try:
++                return await self.control.dispatcher.handle(payload)
++            except Exception:
++                LOG.exception("Couchside UI command failed")
++                try:
++                    value = json.loads(payload)
++                    request_id = value.get("id") if isinstance(value, dict) else None
++                except ValueError:
++                    request_id = None
++                return json.dumps({"id": request_id, "ok": False,
++                                   "error": {"code": "internal_error", "message": "UI operation failed"}})
++
++
++class UiControl(QObject):
++    navigationRequested = Signal(str, str, str)
++
++    def __init__(self):
++        super().__init__()
++        self.bus = None
++        self.controller = None
++        self.ready = asyncio.Event()
++        self.pending = {}
++        self.lock = asyncio.Lock()
++        self.view = {"type": "now_playing", "id": ""}
++        self.dispatcher = Dispatcher(self.snapshot, self.execute)
++
++    async def acquire(self):
++        self.bus = await MessageBus().connect()
++        reply = await self.bus.request_name(BUS_NAME, NameFlag.DO_NOT_QUEUE)
++        if reply == RequestNameReply.PRIMARY_OWNER:
++            self.bus.export(OBJECT_PATH, Endpoint(self))
++            return True
++        # Only the primary creates a controller, QML window or Sendspin helper.
++        request = {"id": str(uuid.uuid4()), "command": "focus"}
++        reply = await self.bus.call(Message(destination=BUS_NAME, path=OBJECT_PATH,
++                                            interface=BUS_NAME, member="Execute", signature="s",
++                                            body=[json.dumps(request)]))
++        if reply.message_type == MessageType.ERROR or not json.loads(reply.body[0]).get("ok"):
++            raise RuntimeError("The existing Couchside UI is not ready")
++        return False
++
++    def attach(self, controller):
++        self.controller = controller
++        self.ready.set()
++
++    def snapshot(self):
++        c = self.controller
++        client = c.conn.client if c else None
++        identity = c._get_client_id() if client and c else None
++        local = find_local_player(list(client.players), identity) if client and identity else None
++        return {"protocol": 1, "ready": self.ready.is_set(),
++                "music_assistant_ready": bool(c and c.conn.state is ConnState.CONNECTED),
++                "content_types": list(CONTENT_TYPES),
++                "playback_owner": "music_assistant", "ma_player_id": local.player_id if local else None,
++                "view": self.view}
++
++    async def execute(self, request):
++        try:
++            await asyncio.wait_for(self.ready.wait(), 10)
++        except TimeoutError as exc:
++            raise ControlError("not_ready", "The Couchside UI is not ready") from exc
++        kind = request.get("content_type", "focus")
++        value = request.get("content_id", "")
++        payload = {}
++        c = self.controller
++        # Resolve content before navigation. These calls never start playback.
++        if kind not in ("focus", "now_playing"):
++            if c.conn.state is not ConnState.CONNECTED or c.conn.client is None:
++                raise ControlError("not_ready", "Music Assistant is not connected")
++            if kind == "search":
++                c._search_gen += 1
++                generation = c._search_gen
++                try:
++                    outcome = await asyncio.wait_for(library.search(c.conn.client, value), 15)
++                except TimeoutError as exc:
++                    raise ControlError("search_failed", "Music Assistant search timed out") from exc
++                if outcome.error:
++                    raise ControlError("search_failed", "Music Assistant search failed")
++                if generation != c._search_gen:
++                    raise ControlError("superseded", "A newer UI search replaced this request")
++                c._set_library(outcome.rows)
++            else:
++                try:
++                    item = await asyncio.wait_for(c.conn.client.music.get_item_by_uri(value), 15)
++                except Exception as exc:
++                    raise ControlError("content_not_found", "Music Assistant could not resolve this item") from exc
++                card = library.to_card(c.conn.client, item)
++                if card is None or card.kind != kind:
++                    raise ControlError("content_not_found", "Resolved item does not match the requested type")
++                from couchside.ui.controller import _card
++                payload = _card(card)
++        request_id = request["id"]
++        future = asyncio.get_running_loop().create_future()
++        self.pending[request_id] = future
++        try:
++            self.navigationRequested.emit(request_id, kind, json.dumps({"value": value, "item": payload}))
++            if not await asyncio.wait_for(future, 5):
++                raise ControlError("navigation_failed", "QML could not open the requested view")
++            if kind != "focus":
++                self.view = {"type": kind, "id": value}
++            return self.snapshot()
++        except TimeoutError as exc:
++            raise ControlError("navigation_failed", "QML did not acknowledge navigation") from exc
++        finally:
++            self.pending.pop(request_id, None)
++
++    @Slot(str, bool)
++    def completeNavigation(self, request_id, success):
++        future = self.pending.get(request_id)
++        if future and not future.done():
++            future.set_result(success)
++
++    def close(self):
++        if self.bus:
++            self.bus.disconnect()
+diff --git a/src/couchside/ui/qml/ContentPage.qml b/src/couchside/ui/qml/ContentPage.qml
+new file mode 100644
+index 0000000..aa89387
+--- /dev/null
++++ b/src/couchside/ui/qml/ContentPage.qml
+@@ -0,0 +1,85 @@
++import QtQuick
++import QtQuick.Layouts
++import QtQuick.Controls as QQC2
++import org.kde.kirigami as Kirigami
++
++// A music item opened by the bridge. Playback is an explicit action in Couchside.
++Kirigami.Page {
++    id: page
++    objectName: "bridgeContent"
++    property real u: 1
++    property var item: ({})
++    property var sheet: null
++    padding: 0
++    globalToolBarStyle: Kirigami.ApplicationHeaderStyle.None
++    background: PageBackground { tint: app.backgroundColour }
++    function focusDefault() { actions.forceActiveFocus() }
++    Component.onCompleted: focusDefault()
++
++    RowLayout {
++        anchors { fill: parent; margins: 72 * page.u }
++        spacing: 56 * page.u
++        Image {
++            source: page.item.imageUrl || ""
++            Layout.preferredWidth: 420 * page.u
++            Layout.preferredHeight: 420 * page.u
++            fillMode: Image.PreserveAspectFit
++            asynchronous: true
++        }
++        ColumnLayout {
++            Layout.fillWidth: true
++            spacing: 28 * page.u
++            QQC2.Label {
++                text: page.item.kind || ""
++                textFormat: Text.PlainText
++                color: Theme.textDim
++                font.pixelSize: 28 * page.u
++            }
++            QQC2.Label {
++                text: page.item.title || ""
++                textFormat: Text.PlainText
++                Layout.fillWidth: true
++                wrapMode: Text.Wrap
++                color: Theme.text
++                font.pixelSize: 48 * page.u
++                font.bold: true
++            }
++            QQC2.Label {
++                text: page.item.subtitle || ""
++                textFormat: Text.PlainText
++                Layout.fillWidth: true
++                wrapMode: Text.Wrap
++                color: Theme.textDim
++                font.pixelSize: 30 * page.u
++            }
++            QQC2.Button {
++                id: actions
++                text: "Play or add to queue"
++                font.pixelSize: 32 * page.u
++                padding: 24 * page.u
++                Keys.onReturnPressed: clicked()
++                Keys.onEnterPressed: clicked()
++                Keys.onPressed: event => {
++                    if (event.key === Qt.Key_Select) { clicked(); event.accepted = true }
++                }
++                onClicked: page.sheet.open(page.item.title, [
++                    { id: "now", label: "Play now" },
++                    { id: "next", label: "Play next" },
++                    { id: "add", label: "Add to queue" }
++                ], actions, mode => app.playUri(page.item.uri, mode))
++                background: Rectangle {
++                    radius: 12 * page.u
++                    color: actions.activeFocus ? Theme.focus : Theme.surfaceHigh
++                    border.width: actions.activeFocus ? 5 * page.u : 0
++                    border.color: Theme.focus
++                }
++                contentItem: QQC2.Label {
++                    text: actions.text
++                    font: actions.font
++                    color: actions.activeFocus ? Theme.focusText : Theme.text
++                }
++            }
++            Item { Layout.fillHeight: true }
++        }
++    }
++}
+diff --git a/tests/test_bridge_control.py b/tests/test_bridge_control.py
+new file mode 100644
+index 0000000..5c1a978
+--- /dev/null
++++ b/tests/test_bridge_control.py
+@@ -0,0 +1,45 @@
++import json
++from unittest.mock import AsyncMock
++
++import pytest
++
++from couchside.core.bridge_control import ControlError, Dispatcher, validate_content
++
++
++@pytest.mark.parametrize("kind,value", [("track", "library://track/123"),
++    ("album", "spotify--abc://album/123"), ("artist", "library://artist/1"),
++    ("playlist", "library://playlist/abc"), ("search", "Björk"), ("now_playing", "")])
++def test_content_types(kind, value):
++    assert validate_content(kind, value) == (kind, value)
++
++
++@pytest.mark.parametrize("kind,value", [("video", "123"), ("track", "https://example.org"),
++    ("track", "library://album/123"), ("track", "library://track/1?command=play"),
++    ("search", "x" * 513), ("search", "a\n"), ("now_playing", "some-id"), ("track", None)])
++def test_invalid_content(kind, value):
++    with pytest.raises(ControlError):
++        validate_content(kind, value)
++
++
++async def test_protocol_ui_only_and_idempotency():
++    execute = AsyncMock(return_value={"view": "search"})
++    dispatcher = Dispatcher(lambda: {"playback_owner": "music_assistant"}, execute)
++    request = dict(id="one", command="navigate", content_type="search", content_id="Björk")
++    first = await dispatcher.handle(json.dumps(request))
++    assert json.loads(first)["ok"]
++    assert await dispatcher.handle(json.dumps(request)) == first
++    execute.assert_awaited_once()
++    bad = json.loads(await dispatcher.handle(json.dumps({**request, "content_id": "other"})))
++    assert bad["error"]["code"] == "invalid_request"
++    for cmd in ("play", "pause", "seek", "eval"):
++        result = json.loads(await dispatcher.handle(json.dumps(dict(id=cmd, command=cmd))))
++        assert result["error"]["code"] == "unsupported"
++    execute.assert_awaited_once()
++
++
++@pytest.mark.parametrize("raw", ["{", "[]", '{}', '{"id":[],"command":"focus"}'])
++async def test_invalid_envelopes(raw):
++    execute = AsyncMock()
++    result = json.loads(await Dispatcher(lambda: {}, execute).handle(raw))
++    assert not result["ok"]
++    execute.assert_not_awaited()
+diff --git a/tests/test_bridge_ui.py b/tests/test_bridge_ui.py
+new file mode 100644
+index 0000000..3985bef
+--- /dev/null
++++ b/tests/test_bridge_ui.py
+@@ -0,0 +1,61 @@
++from types import SimpleNamespace as NS
++from unittest.mock import AsyncMock
++
++import pytest
++
++from couchside.core import library
++from couchside.core.bridge_control import ControlError
++from couchside.core.connection import ConnState
++from couchside.core.settings import AppSettings
++
++
++@pytest.fixture
++async def ui(qt_app, tmp_path, monkeypatch):
++    from couchside.ui.controller import AppController
++    from couchside.ui.bridge_control import UiControl
++    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
++    controller = AppController(AppSettings())
++    controller.conn.client = NS(players=[], music=NS())
++    controller.conn.state = ConnState.CONNECTED
++    control = UiControl()
++    control.attach(controller)
++    # Acknowledge the QML boundary; real QML navigation is tested on the TV.
++    control.navigationRequested.connect(lambda request_id, *_: control.completeNavigation(request_id, True))
++    yield control, controller
++    await controller.close()
++
++
++async def test_search_uses_controller_domain_rows(ui, monkeypatch):
++    control, controller = ui
++    card = library.MediaCard("library://track/1", "track", "Song", "Artist", None, "library://track/1")
++    monkeypatch.setattr(library, "search", AsyncMock(return_value=library.SearchOutcome([("Tracks", [card])])))
++    result = await control.execute(dict(id="search", command="navigate", content_type="search", content_id="Song"))
++    assert controller.libraryRows[0]["items"][0]["title"] == "Song"
++    assert result["view"] == {"type": "search", "id": "Song"}
++    focused = await control.execute(dict(id="focus", command="focus"))
++    assert focused["view"] == result["view"]
++
++
++async def test_item_resolution_is_ui_only(ui):
++    control, controller = ui
++    controller.conn.client.music.get_item_by_uri = AsyncMock(return_value=NS(
++        uri="library://album/1", media_type="album", name="Album", artist_str="Artist", image=None))
++    result = await control.execute(dict(id="item", command="navigate", content_type="album",
++                                        content_id="library://album/1"))
++    assert result["view"] == {"type": "album", "id": "library://album/1"}
++    assert not hasattr(controller.conn.client, "player_queues")  # No playback calls required.
++
++
++async def test_disconnected_search_does_not_navigate(ui):
++    control, controller = ui
++    controller.conn.state = ConnState.RECONNECTING
++    with pytest.raises(ControlError, match="not connected"):
++        await control.execute(dict(id="search", command="navigate", content_type="search", content_id="Song"))
++    assert control.view == {"type": "now_playing", "id": ""}
++
++
++async def test_missing_sendspin_identity_never_matches_another_player(ui, monkeypatch):
++    control, controller = ui
++    monkeypatch.setattr(controller, "_get_client_id", lambda: None)
++    controller.conn.client.players = [NS(player_id="another-speaker", output_protocols=[NS()])]
++    assert control.snapshot()["ma_player_id"] is None

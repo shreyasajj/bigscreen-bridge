@@ -1,0 +1,85 @@
+# Replace event type/entity ID with your own trigger and assigned HA entity ID.
+- alias: Bigscreen movie interface
+  triggers:
+    - trigger: event
+      event_type: bigscreen_movie_button
+  actions:
+    - action: media_player.select_source
+      target:
+        entity_id: media_player.media_ser
+      data:
+        source: Stremio TV
+
+- alias: Bigscreen television interface
+  triggers:
+    - trigger: event
+      event_type: bigscreen_tv_button
+  actions:
+    - action: media_player.play_media
+      target:
+        entity_id: media_player.media_ser
+      data:
+        media_content_type: app
+        media_content_id: flimmer
+
+# UI navigation only; the existing Music Assistant entity owns playback.
+- alias: Bigscreen music screen
+  triggers:
+    - trigger: event
+      event_type: bigscreen_music_button
+  actions:
+    - action: media_player.play_media
+      target:
+        entity_id: media_player.media_ser
+      data:
+        media_content_type: couchside_now_playing
+        media_content_id: ""
+
+- alias: Bigscreen series episode
+  triggers:
+    - trigger: event
+      event_type: bigscreen_series_button
+  actions:
+    - action: media_player.play_media
+      target:
+        entity_id: media_player.media_ser_stremio_tv
+      data:
+        media_content_type: stremio_episode
+        media_content_id: '{"series_id":"tt0944947","video_id":"tt0944947:1:2"}'
+
+# Replace the content ID with an actual opaque ID returned by Flimmer browsing.
+- alias: Bigscreen IPTV channel
+  triggers:
+    - trigger: state
+      entity_id: input_button.bigscreen_iptv
+  actions:
+    - action: media_player.play_media
+      target:
+        entity_id: media_player.bigscreen_flimmer
+      data:
+        media_content_type: flimmer_channel
+        media_content_id: "channel-REPLACE_WITH_64_HEX_DIGITS_FROM_BROWSING"
+
+- alias: Bigscreen YouTube video
+  triggers:
+    - trigger: state
+      entity_id: input_button.bigscreen_youtube
+  actions:
+    - action: media_player.play_media
+      target:
+        entity_id: media_player.bigscreen_youtube
+      data:
+        media_content_type: youtube_video
+        media_content_id: M7lc1UVf-VE
+
+- alias: Bigscreen YouTube search
+  triggers:
+    - trigger: state
+      entity_id: input_button.bigscreen_youtube_search
+  actions:
+    - action: media_player.play_media
+      target:
+        entity_id: media_player.bigscreen_youtube
+      data:
+        media_content_type: youtube_search
+        media_content_id: KDE Bigscreen

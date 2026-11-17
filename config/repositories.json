@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "repositories": {
+    "couchside": {
+      "path": "/Users/shre/Documents/projects/couchside",
+      "repository": "https://github.com/shreyasajj/couchside"
+    },
+    "stremio": {
+      "path": "/Users/shre/Documents/projects/stremio-tv",
+      "repository": "https://github.com/shreyasajj/stremio-tv",
+      "development_branch": "bigscreen-bridge",
+      "base_revision": "605547b575ba2c20f791e96f8089ae7ff19a076d"
+    },
+    "flimmer": {
+      "path": "/Users/shre/Documents/projects/plasma-tv",
+      "repository": "https://github.com/jclsn/plasma-tv"
+    },
+    "vacuumtube": {
+      "path": "/Users/shre/Documents/projects/VacuumTube",
+      "repository": "https://github.com/shreyasajj/VacuumTube",
+      "upstream": "https://github.com/shy1132/VacuumTube",
+      "development_branch": "bigscreen-bridge"
+    }
+  }
+}

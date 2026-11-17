@@ -1,0 +1,12 @@
+upstream/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.env
+
+.ruff_cache/
+build/
+
+artifacts/

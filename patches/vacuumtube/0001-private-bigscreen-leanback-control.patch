@@ -1,0 +1,1152 @@
+From f5a5449fd57232429fabf6132ba45b749e2741b9 Mon Sep 17 00:00:00 2001
+From: shreyasajj <shreyas.github@proton.me>
+Date: Mon, 16 Nov 2026 12:14:07 -0600
+Subject: [PATCH] feat: Add private Bigscreen Bridge control for Leanback
+
+Reuse the existing instance, deep-link listener and volume controller for acknowledged local Home Assistant commands. Confirm real navigation, observe public title metadata, enforce private bounded IPC and expose only available player features. Include deterministic protocol and startup tests plus a development install path that preserves the system Flatpak.
+---
+ README.md                                   |   6 +
+ docs/bigscreen-bridge.md                    | 107 ++++++++++
+ flatpak/install-bridge.sh                   |  31 +++
+ scripts/build-bridge-asar.cjs               |  32 +++
+ src/bridge-control.js                       | 147 +++++++++++++
+ src/bridge-electron.js                      |  81 ++++++++
+ src/bridge-protocol.js                      |  94 +++++++++
+ src/index.js                                |   4 +
+ src/preload/modules/bigscreen-bridge.js     |   2 +
+ src/preload/modules/h5vcc/index.js          |   9 +
+ src/preload/modules/volume-control/index.js |  16 ++
+ src/preload/util/bigscreen-metadata.js      |  49 +++++
+ src/preload/util/bigscreen-navigation.js    |  25 +++
+ src/preload/util/bigscreen-player.js        |  34 ++++
+ src/preload/util/bigscreen-runtime.js       |  99 +++++++++
+ src/preload/util/resolveCommandModifiers.js |   7 +
+ test/bridge-control.test.js                 | 215 ++++++++++++++++++++
+ 17 files changed, 958 insertions(+)
+ create mode 100644 docs/bigscreen-bridge.md
+ create mode 100755 flatpak/install-bridge.sh
+ create mode 100755 scripts/build-bridge-asar.cjs
+ create mode 100644 src/bridge-control.js
+ create mode 100644 src/bridge-electron.js
+ create mode 100644 src/bridge-protocol.js
+ create mode 100644 src/preload/modules/bigscreen-bridge.js
+ create mode 100644 src/preload/util/bigscreen-metadata.js
+ create mode 100644 src/preload/util/bigscreen-navigation.js
+ create mode 100644 src/preload/util/bigscreen-player.js
+ create mode 100644 src/preload/util/bigscreen-runtime.js
+ create mode 100644 test/bridge-control.test.js
+
+diff --git a/README.md b/README.md
+index d5fb20d..e1464fa 100644
+--- a/README.md
++++ b/README.md
+@@ -218,3 +218,9 @@ npm run windows:build
+ npm run mac:build
+ npm run linux:build(-unpacked,-appimage)
+ ```
++
++## Bigscreen Bridge
++
++The development branch includes private local control for Home Assistant: video,
++playlist and search navigation, playback metadata, player controls and shared app
++volume/mute. See [the protocol, tested behavior and install guide](docs/bigscreen-bridge.md).
+diff --git a/docs/bigscreen-bridge.md b/docs/bigscreen-bridge.md
+new file mode 100644
+index 0000000..2926af6
+--- /dev/null
++++ b/docs/bigscreen-bridge.md
+@@ -0,0 +1,107 @@
++# Bigscreen Bridge local control
++
++This checkout is the local `bigscreen-bridge` branch of
++[shreyasajj/VacuumTube](https://github.com/shreyasajj/VacuumTube), based on
++upstream revision `0c7df3a1e2411b430e416a0b8f3c872bb1f8fb4d`. The patch adds
++local control without changing Electron's existing per-profile instance lock.
++
++## Interface
++
++On Linux the main process owns
++`$XDG_RUNTIME_DIR/bigscreen-bridge/vacuumtube.sock`. The directory is mode 0700,
++the socket mode 0600, and both must belong to the current Unix user. The Flatpak
++adds only `--filesystem=xdg-run/bigscreen-bridge:create` to its existing permissions.
++This does not grant access to the external bridge's configuration or bearer token.
++
++Each connection sends one JSON line, at most 16 KiB, and receives one JSON line.
++Every command has a bounded string request `id`. Responses contain the same `id`,
++`ok`, and either `result` or `error: {code,message}`. A cache of 128 results makes
++retries idempotent; conflicting reuse of an ID fails. Transient readiness/busy
++errors are retriable. Mutating commands are serialized while state/focus requests
++remain available. Connections, pending commands and idle times are bounded.
++
++```json
++{"id":"state-1","command":"get_state"}
++{"id":"focus-1","command":"focus"}
++{"id":"video-1","command":"open","content_type":"video","content_id":"M7lc1UVf-VE"}
++{"id":"playlist-1","command":"open","content_type":"playlist","content_id":"PLBCF2DAC6FFB574DE"}
++{"id":"search-1","command":"open","content_type":"search","content_id":"KDE Bigscreen"}
++{"id":"pause-1","command":"pause"}
++{"id":"play-1","command":"play"}
++{"id":"seek-1","command":"seek","position":12}
++{"id":"level-1","command":"volume_set","volume_level":0.25}
++{"id":"mute-1","command":"volume_mute","muted":true}
++{"id":"stop-1","command":"stop"}
++```
++
++Video IDs have exactly 11 URL-safe characters; playlist IDs have 10–128. Search
++text is limited to 200 characters and excludes control characters. Requests
++cannot supply URLs, script, shell commands or configuration fields.
++
++The main process accepts bridge telemetry/acknowledgements only from its current
++BrowserWindow and an HTTPS `www.youtube.com/tv` frame. It prefers the frame that
++owns the player and invalidates control on navigation, window closure and renderer
++loss. A five-second watchdog stops advertising stale player capabilities.
++
++## Tested Leanback behavior
++
++Video and playlist navigation reuse the existing `h5vcc` deep-link listener.
++The ordinary YouTube results URL did **not** open search during live testing.
++Search instead uses a fixed `searchEndpoint` through VacuumTube's existing
++command resolver. Its readiness is advertised separately from the link listener.
++
++Leanback registers its listener before the initial route has settled. Navigation
++therefore retries the same fixed request at three-second intervals, bounded to
++18 seconds, until the requested route/content is observed. Acknowledgements are
++`video_selected`, `playlist_selected` or `search_opened`; unsupported/unconfirmed
++navigation returns an explicit error. Search confirmation includes the actual
++public query observed in Leanback's search request. Selection is distinct from
++successful network playback; follow media state for playback status.
++
++Telemetry uses the actual `.html5-video-player` APIs for ID, position, duration,
++state and player output volume. `getVideoData().title` was empty in live Leanback,
++so a bounded, read-only cache observes public ID/title fields from responses the
++application already parses. It never retains stream URLs, cookies or response
++bodies. Thumbnails use the fixed YouTube image host and the validated video ID.
++
++Play/pause/stop/seek are advertised only when the corresponding player method and
++state support them. Seek is absolute, finite and bounded by duration. Volume and
++mute use the existing volume-control module's controller, shared with keyboard
++and casting actions; directly setting player volume would be overwritten by its
++100 ms loop. `volume` is the configured level, `muted` is separate, and
++`output_volume` is read from the player for verification. Levels are 0–1 with
++percent granularity. No next/previous/repeat/queue features are advertised.
++
++## Development installation
++
++Use the companion bridge repository's `scripts/deploy-vacuumtube.sh` with this
++checkout. It runs `scripts/build-bridge-asar.cjs` locally against the installed
++archive, checks that version/dependencies match, and keeps the installed Linux
++Electron binary and production dependencies. This adds no runtime dependencies.
++For a different version/dependency set, use a full Linux Electron build instead.
++
++The TV needs its existing VacuumTube Flatpak plus `org.freedesktop.Sdk//26.08`.
++`flatpak/install-bridge.sh` installs a user-level build from the local
++`bigscreen-vacuumtube` development repository. The system Flatpak remains intact.
++The original commit is recorded in `~/.cache/vacuumtube-bridge-build/base-commit`.
++No upstream release is published or automatically installed by this path.
++
++Rollback to the system installation with `flatpak uninstall --user
++rocks.shy.VacuumTube` (without deleting app data), and disable `vacuumtube_control`
++in the bridge's private configuration if the restored build lacks the hook.
++Normal user-profile data remains in the same Flatpak application directory.
++
++## Validation
++
++Run `npm test` for protocol, replay, frame trust, socket permissions/bounds,
++metadata matching, delayed navigation and controller tests. Companion TV scripts
++exercise the real Leanback page, existing instance reuse, metadata, video/playlist/
++search, playback, volume/mute, authenticated Wayland control and cold launch.
++The native smoke test uses a separate `--portable` test profile, then the bridge
++smoke test confirms cold launch of the normal profile. Configuration backups are
++private under `~/.cache/bigscreen-backups/`. Test playback is stopped afterward.
++
++Live verification applies to the tested Leanback implementation and content.
++Future YouTube changes can invalidate capabilities; errors/timeouts are reported
++instead of silently opening another window. The patch does not extract secrets,
++export playlists/subscriptions, or add YouTube library browsing.
+diff --git a/flatpak/install-bridge.sh b/flatpak/install-bridge.sh
+new file mode 100755
+index 0000000..83cebe8
+--- /dev/null
++++ b/flatpak/install-bridge.sh
+@@ -0,0 +1,31 @@
++#!/bin/sh
++# User-only development installation. The system Flatpak remains available for rollback.
++set -eu
++archive="${1:?Pass the bridge app.asar built from the matching installed version}"
++app_id=rocks.shy.VacuumTube
++stage_root="$HOME/.cache/vacuumtube-bridge-build"
++remote=bigscreen-vacuumtube
++mkdir -p "$stage_root"
++if [ ! -f "$stage_root/app/metadata" ]; then
++    flatpak info --show-commit "$app_id" > "$stage_root/base-commit"
++    flatpak build-init --base="$app_id" --base-version=stable "$stage_root/app" "$app_id" org.freedesktop.Sdk org.freedesktop.Platform 26.08
++fi
++cp "$archive" "$stage_root/app/files/bin/vacuumtube/resources/app.asar"
++if ! grep -q '^command=startvacuumtube$' "$stage_root/app/metadata"; then
++    flatpak build-finish "$stage_root/app" --command=startvacuumtube --share=ipc --share=network \
++        --socket=wayland --socket=fallback-x11 --socket=pulseaudio --device=all \
++        --filesystem=/run/udev:ro --filesystem=xdg-run/bigscreen-bridge:create \
++        --talk-name=org.freedesktop.ScreenSaver --talk-name=org.gnome.ScreenSaver \
++        --talk-name=org.mate.ScreenSaver --talk-name=org.cinnamon.ScreenSaver \
++        --talk-name=org.xfce.ScreenSaver --own-name=org.mpris.MediaPlayer2.chromium.*
++fi
++flatpak build-export "$stage_root/repo" "$stage_root/app" stable
++expected_url="file://$stage_root/repo"
++remote_url=$(flatpak remotes --user --columns=name,url | awk '$1 == "bigscreen-vacuumtube" {print $2}')
++if [ -n "$remote_url" ] && [ "$remote_url" != "$expected_url" ]; then
++    printf '%s\n' 'The development remote already points elsewhere; leaving it unchanged.' >&2
++    exit 1
++fi
++flatpak remote-add --user --no-gpg-verify --if-not-exists "$remote" "$expected_url"
++flatpak install --user --reinstall -y --noninteractive "$remote" "$app_id//stable"
++printf '%s\n' 'Installed the development build. Restart only the VacuumTube main process to load it.'
+diff --git a/scripts/build-bridge-asar.cjs b/scripts/build-bridge-asar.cjs
+new file mode 100755
+index 0000000..9c4aabc
+--- /dev/null
++++ b/scripts/build-bridge-asar.cjs
+@@ -0,0 +1,32 @@
++#!/usr/bin/env node
++// Reuse the installed Linux Electron binary and matching production dependencies.
++const fs = require('node:fs')
++const path = require('node:path')
++const os = require('node:os')
++const asar = require('@electron/asar')
++
++async function main() {
++    const [baseline, output] = process.argv.slice(2)
++    if (!baseline || !output) throw new Error('Usage: build-bridge-asar.cjs installed-app.asar output.asar')
++    const root = path.resolve(__dirname, '..')
++    const sourcePackage = JSON.parse(fs.readFileSync(path.join(root, 'package.json')))
++    const installedPackage = JSON.parse(asar.extractFile(baseline, 'package.json'))
++    const dependencies = (value) => JSON.stringify(Object.entries(value || {}).sort(([a], [b]) => a.localeCompare(b)))
++    if (sourcePackage.version !== installedPackage.version || dependencies(sourcePackage.dependencies) !== dependencies(installedPackage.dependencies)) {
++        throw new Error('Installed version/dependencies differ; use a full Linux build instead')
++    }
++    const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'vacuumtube-bridge-asar-'))
++    try {
++        asar.extractAll(baseline, staging)
++        fs.rmSync(path.join(staging, 'src'), {recursive: true, force: true})
++        for (const name of ['src', 'assets', 'locale']) {
++            const source = path.join(root, name)
++            if (fs.existsSync(source)) fs.cpSync(source, path.join(staging, name), {recursive: true})
++        }
++        await asar.createPackage(staging, output)
++        console.log('Built local bridge archive:', output)
++    } finally {
++        fs.rmSync(staging, {recursive: true, force: true})
++    }
++}
++main().catch((error) => { console.error(error.message); process.exitCode = 1 })
+diff --git a/src/bridge-control.js b/src/bridge-control.js
+new file mode 100644
+index 0000000..81cb30d
+--- /dev/null
++++ b/src/bridge-control.js
+@@ -0,0 +1,147 @@
++const fs = require('fs')
++const path = require('path')
++const net = require('net')
++const {ControlError, validate, sanitizeState} = require('./bridge-protocol')
++
++const MAX_BYTES = 16384
++const CACHE_SIZE = 128
++
++function canonical(request) {
++    return JSON.stringify(Object.fromEntries(Object.entries(request).sort(([a], [b]) => a.localeCompare(b))))
++}
++
++class BridgeControl {
++    constructor({focus, dispatch, now = Date.now}) {
++        this.focus = focus
++        this.dispatch = dispatch
++        this.now = now
++        this.state = sanitizeState()
++        this.updatedAt = 0
++        this.cache = new Map()
++        this.pending = new Map()
++    }
++
++    publish(state) {
++        this.state = sanitizeState(state)
++        this.updatedAt = this.now()
++    }
++
++    invalidate() {
++        this.state = sanitizeState()
++        this.updatedAt = 0
++    }
++
++    snapshot() {
++        const fresh = this.updatedAt > 0 && this.now() - this.updatedAt < 5000
++        return {...this.state, ready: fresh && this.state.ready,
++            capabilities: fresh ? this.state.capabilities : [],
++            media: fresh ? {...this.state.media, updated_at: new Date(this.updatedAt).toISOString()} : {state: 'idle'}}
++    }
++
++    async run(request) {
++        if (request.command === 'get_state') return this.snapshot()
++        if (request.command === 'focus') {
++            await this.focus()
++            return {delivery: 'focus_requested'}
++        }
++        const state = this.snapshot()
++        if (!state.ready) throw new ControlError('not_ready', 'Leanback control is not ready')
++        if (request.command === 'open') {
++            if (!state.content_types.includes(request.content_type)) throw new ControlError('unsupported', 'Navigation type is unavailable')
++        } else if (!state.capabilities.includes(request.command)) {
++            throw new ControlError('unsupported', 'Player command is unavailable')
++        }
++        if (request.command === 'seek' && request.position > state.media.duration) throw new ControlError('invalid_request', 'Seek exceeds duration')
++        return await this.dispatch(request)
++    }
++
++    async execute(request) {
++        let id = typeof request?.id === 'string' ? request.id : null
++        try {
++            validate(request)
++            const key = canonical(request)
++            for (const entries of [this.cache, this.pending]) {
++                if (!entries.has(id)) continue
++                const previous = entries.get(id)
++                if (previous.key !== key) throw new ControlError('invalid_request', 'Request ID reused with different data')
++                return await previous.response
++            }
++            const mutating = !['get_state', 'focus'].includes(request.command)
++            if (mutating && [...this.pending.values()].some((item) => item.mutating)) throw new ControlError('busy', 'Another player command is in progress')
++            if (this.pending.size >= 16) throw new ControlError('busy', 'Too many pending commands')
++            const response = this.run(request).then((result) => ({id, ok: true, result}))
++                .catch((error) => ({id, ok: false, error: {code: error.code || 'command_failed',
++                    message: error instanceof ControlError ? error.message : 'Application command failed'}}))
++            this.pending.set(id, {key, response, mutating})
++            const result = await response
++            this.pending.delete(id)
++            if (result.ok || !['not_ready', 'busy'].includes(result.error.code)) {
++                this.cache.set(id, {key, response: result})
++                while (this.cache.size > CACHE_SIZE) this.cache.delete(this.cache.keys().next().value)
++            }
++            return result
++        } catch (error) {
++            return {id, ok: false, error: {code: error.code || 'invalid_request', message: error.message}}
++        }
++    }
++}
++
++async function listen(control, runtime = process.env.XDG_RUNTIME_DIR) {
++    if (!runtime || !path.isAbsolute(runtime)) throw new Error('No private runtime directory')
++    const directory = path.join(runtime, 'bigscreen-bridge')
++    fs.mkdirSync(directory, {mode: 0o700, recursive: true})
++    const info = fs.lstatSync(directory)
++    if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid()) throw new Error('Unsafe runtime directory')
++    fs.chmodSync(directory, 0o700)
++    const socketPath = path.join(directory, 'vacuumtube.sock')
++    if (fs.existsSync(socketPath)) {
++        const previous = fs.lstatSync(socketPath)
++        if (!previous.isSocket() || previous.uid !== process.getuid()) throw new Error('Unsafe socket path')
++        const alive = await new Promise((resolve) => {
++            const probe = net.createConnection(socketPath)
++            probe.once('connect', () => { probe.destroy(); resolve(true) })
++            probe.once('error', () => resolve(false))
++            probe.setTimeout(1000, () => { probe.destroy(); resolve(true) })
++        })
++        if (alive) throw new Error('Control socket is already in use')
++        fs.unlinkSync(socketPath)
++    }
++    const sockets = new Set()
++    const server = net.createServer((socket) => {
++        sockets.add(socket)
++        socket.on('close', () => sockets.delete(socket))
++        socket.on('error', () => {})
++        socket.setTimeout(30000, () => socket.destroy())
++        let buffer = Buffer.alloc(0)
++        let received = false
++        socket.on('data', async (chunk) => {
++            if (received) return
++            buffer = Buffer.concat([buffer, chunk])
++            if (buffer.length > MAX_BYTES) { socket.destroy(); return }
++            const newline = buffer.indexOf(10)
++            if (newline < 0) return
++            received = true
++            socket.pause()
++            try {
++                if (buffer.subarray(newline + 1).toString().trim()) throw new Error('Only one request per connection')
++                const request = JSON.parse(buffer.subarray(0, newline).toString())
++                socket.end(JSON.stringify(await control.execute(request)) + '\n')
++            } catch {
++                socket.end(JSON.stringify({id: null, ok: false, error: {code: 'invalid_request', message: 'Expected one bounded JSON line'}}) + '\n')
++            }
++        })
++    })
++    server.maxConnections = 16
++    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve) })
++    fs.chmodSync(socketPath, 0o600)
++    const inode = fs.lstatSync(socketPath).ino
++    return {socketPath, close: async () => {
++        for (const socket of sockets) socket.destroy()
++        await new Promise((resolve) => server.close(resolve))
++        try {
++            if (fs.lstatSync(socketPath).ino === inode) fs.unlinkSync(socketPath)
++        } catch {}
++    }}
++}
++
++module.exports = {BridgeControl, listen}
+diff --git a/src/bridge-electron.js b/src/bridge-electron.js
+new file mode 100644
+index 0000000..a2719b8
+--- /dev/null
++++ b/src/bridge-electron.js
+@@ -0,0 +1,81 @@
++const {BridgeControl, listen} = require('./bridge-control')
++const {ControlError, trustedFrame, sanitizeState} = require('./bridge-protocol')
++
++function setup({electron, getWindow, runtime}) {
++    let owner = null
++    let transport = null
++    const pending = new Map()
++    const control = new BridgeControl({
++        focus: async () => {
++            const win = getWindow()
++            if (!win || win.isDestroyed()) throw new ControlError('not_ready', 'No application window')
++            if (win.isMinimized()) win.restore()
++            win.show()
++            win.focus()
++        },
++        dispatch: (request) => new Promise((resolve, reject) => {
++            if (!owner) { reject(new ControlError('not_ready', 'Leanback frame is unavailable')); return }
++            const frame = owner
++            const timer = setTimeout(() => {
++                pending.delete(request.id)
++                reject(new ControlError('command_timeout', 'Leanback did not acknowledge the command'))
++            }, 20000)
++            pending.set(request.id, {frame, resolve, reject, timer})
++            try {
++                frame.send('bigscreen-command', request)
++            } catch {
++                clearTimeout(timer)
++                pending.delete(request.id)
++                reject(new ControlError('not_ready', 'Leanback frame is unavailable'))
++            }
++        })
++    })
++
++    function invalidate() {
++        owner = null
++        control.invalidate()
++        for (const item of pending.values()) {
++            clearTimeout(item.timer)
++            item.reject(new ControlError('not_ready', 'Leanback frame became unavailable'))
++        }
++        pending.clear()
++    }
++
++    electron.ipcMain.on('bigscreen-state', (event, payload) => {
++        if (!trustedFrame(event, getWindow())) return
++        const state = sanitizeState(payload)
++        // Prefer the frame with the player when Leanback is embedded in a subframe.
++        if (!owner || event.senderFrame === owner || state.media.video_id || !control.snapshot().media.video_id) {
++            owner = event.senderFrame
++            control.publish(state)
++        }
++    })
++    electron.ipcMain.on('bigscreen-complete', (event, payload) => {
++        if (!trustedFrame(event, getWindow()) || typeof payload?.id !== 'string') return
++        const item = pending.get(payload.id)
++        if (!item || event.senderFrame !== item.frame) return
++        clearTimeout(item.timer)
++        pending.delete(payload.id)
++        if (payload.ok === true && ['video_selected', 'playlist_selected', 'search_opened', 'player_called'].includes(payload.result?.delivery)) {
++            item.resolve({delivery: payload.result.delivery})
++        } else {
++            const code = ['unsupported', 'invalid_request', 'not_ready', 'navigation_failed'].includes(payload.error?.code) ? payload.error.code : 'command_failed'
++            item.reject(new ControlError(code, 'Leanback command failed'))
++        }
++    })
++    electron.ipcMain.on('bigscreen-gone', (event) => {
++        if (trustedFrame(event, getWindow()) && event.senderFrame === owner) invalidate()
++    })
++    if (process.platform === 'linux') {
++        listen(control, runtime).then((server) => { transport = server })
++            .catch(() => console.error('Bigscreen local control is unavailable'))
++    }
++    electron.app.on('before-quit', () => { invalidate(); transport?.close() })
++    return {watchWindow: (win) => {
++        win.webContents.on('did-start-navigation', (event, url, inPlace, mainFrame) => { if (mainFrame && !inPlace) invalidate() })
++        win.webContents.on('render-process-gone', invalidate)
++        win.on('closed', invalidate)
++    }}
++}
++
++module.exports = {setup}
+diff --git a/src/bridge-protocol.js b/src/bridge-protocol.js
+new file mode 100644
+index 0000000..c5654cd
+--- /dev/null
++++ b/src/bridge-protocol.js
+@@ -0,0 +1,94 @@
++// Fixed-schema local commands. Never accept renderer code, filesystem paths or URLs.
++const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/
++const PLAYLIST_ID = /^[A-Za-z0-9_-]{10,128}$/
++const COMMANDS = ['get_state', 'focus', 'open', 'play', 'pause', 'stop', 'seek', 'volume_set', 'volume_mute']
++const PLAYER_COMMANDS = ['play', 'pause', 'stop', 'seek', 'volume_set', 'volume_mute']
++const CONTENT_TYPES = ['video', 'playlist', 'search']
++
++class ControlError extends Error {
++    constructor(code, message) {
++        super(message)
++        this.code = code
++    }
++}
++
++function validate(request) {
++    const invalid = (message) => { throw new ControlError('invalid_request', message) }
++    if (!request || typeof request !== 'object' || Array.isArray(request)) invalid('Expected a JSON object')
++    if (typeof request.id !== 'string' || !request.id.length || request.id.length > 128) invalid('A bounded string request ID is required')
++    if (!COMMANDS.includes(request.command)) throw new ControlError('unsupported', 'Unsupported command')
++    const allowed = ['id', 'command']
++    if (request.command === 'open') allowed.push('content_type', 'content_id')
++    if (request.command === 'seek') allowed.push('position')
++    if (request.command === 'volume_set') allowed.push('volume_level')
++    if (request.command === 'volume_mute') allowed.push('muted')
++    if (Object.keys(request).some((key) => !allowed.includes(key))) invalid('Unknown request fields')
++    if (request.command === 'seek' && (typeof request.position !== 'number' || !Number.isFinite(request.position) || request.position < 0)) invalid('Invalid seek position')
++    if (request.command === 'volume_set' && (typeof request.volume_level !== 'number' || !Number.isFinite(request.volume_level) || request.volume_level < 0 || request.volume_level > 1)) invalid('Volume must be between zero and one')
++    if (request.command === 'volume_mute' && typeof request.muted !== 'boolean') invalid('Muted must be boolean')
++    if (request.command === 'open') {
++        const value = request.content_id
++        if (!CONTENT_TYPES.includes(request.content_type)) throw new ControlError('unsupported', 'Unsupported content type')
++        if (typeof value !== 'string') invalid('Content ID must be a string')
++        if (request.content_type === 'video' && !VIDEO_ID.test(value)) invalid('Invalid YouTube video ID')
++        if (request.content_type === 'playlist' && !PLAYLIST_ID.test(value)) invalid('Invalid YouTube playlist ID')
++        if (request.content_type === 'search' && (!value.trim() || value.length > 200 || /[\u0000-\u001f\u007f]/.test(value))) invalid('Invalid search text')
++    }
++    return request
++}
++
++function navigationUrl(type, value) {
++    validate({id: 'url', command: 'open', content_type: type, content_id: value})
++    if (type === 'video') return 'https://www.youtube.com/watch?v=' + encodeURIComponent(value)
++    if (type === 'playlist') return 'https://www.youtube.com/playlist?list=' + encodeURIComponent(value)
++    return 'https://www.youtube.com/results?search_query=' + encodeURIComponent(value)
++}
++
++function sanitizeState(input = {}) {
++    if (!input || typeof input !== 'object' || Array.isArray(input)) input = {}
++    const contentTypes = Array.isArray(input.content_types) ? input.content_types : []
++    const capabilities = Array.isArray(input.capabilities) ? input.capabilities : []
++    const state = {protocol: 1, ready: input.ready === true, content_types: [], capabilities: [], media: {state: 'idle'}}
++    state.content_types = CONTENT_TYPES.filter((type) => contentTypes.includes(type))
++    const view = input.view || {}
++    if (['watch', 'playlist', 'search', 'home'].includes(view.kind)) {
++        state.view = {kind: view.kind}
++        if (typeof view.video_id === 'string' && VIDEO_ID.test(view.video_id)) state.view.video_id = view.video_id
++        if (typeof view.query === 'string' && view.query.length <= 200) state.view.query = view.query
++        if (typeof view.playlist_id === 'string' && PLAYLIST_ID.test(view.playlist_id)) state.view.playlist_id = view.playlist_id
++    }
++    const media = input.media || {}
++    if (typeof media.video_id === 'string' && VIDEO_ID.test(media.video_id)) {
++        if (typeof media.playlist_id === 'string' && PLAYLIST_ID.test(media.playlist_id)) state.media.playlist_id = media.playlist_id
++        state.media.video_id = media.video_id
++        state.media.title = typeof media.title === 'string' ? media.title.slice(0, 2048) : ''
++        state.media.thumbnail = `https://i.ytimg.com/vi/${media.video_id}/hqdefault.jpg`
++        state.media.state = ['playing', 'paused', 'buffering'].includes(media.state) ? media.state : 'idle'
++        for (const key of ['position', 'duration']) {
++            if (typeof media[key] === 'number' && Number.isFinite(media[key]) && media[key] >= 0) state.media[key] = media[key]
++        }
++    }
++    for (const key of ['volume', 'output_volume']) {
++        if (typeof media[key] === 'number' && Number.isFinite(media[key]) && media[key] >= 0 && media[key] <= 1) state.media[key] = media[key]
++    }
++    if (typeof media.muted === 'boolean') state.media.muted = media.muted
++    state.capabilities = PLAYER_COMMANDS.filter((command) => {
++        if (!capabilities.includes(command)) return false
++        if (command === 'volume_set') return state.media.volume !== undefined
++        if (command === 'volume_mute') return state.media.volume !== undefined && state.media.muted !== undefined
++        return !!state.media.video_id && (command !== 'seek' || state.media.duration > 0)
++    })
++    return state
++}
++
++function trustedFrame(event, win) {
++    if (!win || win.isDestroyed() || event.sender !== win.webContents) return false
++    try {
++        const url = new URL(event.senderFrame.url)
++        return url.protocol === 'https:' && url.hostname === 'www.youtube.com' && !url.port && url.pathname === '/tv'
++    } catch {
++        return false
++    }
++}
++
++module.exports = {ControlError, validate, navigationUrl, sanitizeState, trustedFrame, VIDEO_ID}
+diff --git a/src/index.js b/src/index.js
+index 22e6a93..414bbd3 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -48,6 +48,7 @@ const runningOnSteam = process.env.SteamOS === '1' && process.env.SteamGamepadUI
+ let win;
+ let config;
+ let windowDeeplink = null;
++let bigscreenControl;
+ 
+ async function main() {
+     if (argv['version']) {
+@@ -302,6 +303,7 @@ async function main() {
+ 
+     userstyles.setup({ userData, getWindow: () => win })
+ 
++    bigscreenControl = require('./bridge-electron').setup({electron, getWindow: () => win})
+     await createWindow()
+ 
+     updater.setup({
+@@ -363,6 +365,8 @@ async function createWindow() {
+         title: 'VacuumTube'
+     })
+ 
++    bigscreenControl?.watchWindow(win)
++
+     // Ensure the *content* area (excluding OS window borders) stays 16:9 on all platforms.
+     const [ outerW, outerH ] = win.getSize()
+     const [ innerW, innerH ] = win.getContentSize()
+diff --git a/src/preload/modules/bigscreen-bridge.js b/src/preload/modules/bigscreen-bridge.js
+new file mode 100644
+index 0000000..5fdf251
+--- /dev/null
++++ b/src/preload/modules/bigscreen-bridge.js
+@@ -0,0 +1,2 @@
++// The runtime accepts only fixed, validated operations from the main process.
++module.exports = () => require('../util/bigscreen-runtime').start()
+diff --git a/src/preload/modules/h5vcc/index.js b/src/preload/modules/h5vcc/index.js
+index 5297b42..df4f1be 100644
+--- a/src/preload/modules/h5vcc/index.js
++++ b/src/preload/modules/h5vcc/index.js
+@@ -1,4 +1,5 @@
+ const { ipcRenderer } = require('electron')
++const bigscreen = require('../../util/bigscreen-runtime')
+ const http = require('./dial/http')
+ const DialServer = require('./dial/server')
+ const discover = require('./dial/discover')
+@@ -54,8 +55,10 @@ function createOnDeepLink() {
+     function callListener(listener, deeplink) {
+         try {
+             listener(deeplink)
++            return true
+         } catch (err) {
+             console.error('[h5vcc] Deeplink listener failed', err)
++            return false
+         }
+     }
+ 
+@@ -72,7 +75,13 @@ function createOnDeepLink() {
+ 
+     return {
+         addListener: (listener) => {
++            if (typeof listener !== 'function') return
+             listeners.push(listener)
++            bigscreen.setNavigation((deeplink) => {
++                let delivered = false
++                for (const target of listeners) delivered = callListener(target, deeplink) || delivered
++                return delivered
++            })
+             while (pending.length > 0) {
+                 callListener(listener, pending.shift())
+             }
+diff --git a/src/preload/modules/volume-control/index.js b/src/preload/modules/volume-control/index.js
+index ac01483..29376cd 100644
+--- a/src/preload/modules/volume-control/index.js
++++ b/src/preload/modules/volume-control/index.js
+@@ -142,6 +142,22 @@ module.exports = async () => {
+         return false;
+     })
+ 
++    // Share the same controller with local automation, so the periodic update,
++    // keyboard shortcuts and cast actions all keep one authoritative volume.
++    require('../../util/bigscreen-runtime').setVolumeController({
++        snapshot: () => ({level: volume / 100, muted}),
++        setLevel: (level) => {
++            volume = Math.round(level * 100)
++            showVolumeIndicator()
++            setVolume()
++        },
++        setMuted: (value) => {
++            muted = value
++            showVolumeIndicator()
++            setVolume()
++        }
++    })
++
+     //player can change sometimes
+     setInterval(() => {
+         setVolume(true)
+diff --git a/src/preload/util/bigscreen-metadata.js b/src/preload/util/bigscreen-metadata.js
+new file mode 100644
+index 0000000..2cdda1e
+--- /dev/null
++++ b/src/preload/util/bigscreen-metadata.js
+@@ -0,0 +1,49 @@
++const {VIDEO_ID} = require('../../bridge-protocol')
++
++function text(value) {
++    if (typeof value === 'string') return value
++    if (typeof value?.simpleText === 'string') return value.simpleText
++    return Array.isArray(value?.runs) ? value.runs.map((run) => typeof run.text === 'string' ? run.text : '').join('') : ''
++}
++
++// Observe only public title/ID fields from responses Leanback already requested.
++class MetadataCache {
++    constructor() { this.titles = new Map(); this.searchQuery = null }
++
++    remember(id, title) {
++        if (typeof id !== 'string' || !VIDEO_ID.test(id) || typeof title !== 'string' || !title.trim()) return
++        this.titles.delete(id)
++        this.titles.set(id, title.slice(0, 2048))
++        while (this.titles.size > 64) this.titles.delete(this.titles.keys().next().value)
++    }
++
++    observe(json) {
++        for (const candidate of [json, json?.playerResponse]) {
++            this.remember(candidate?.videoDetails?.videoId, candidate?.videoDetails?.title)
++        }
++        const id = json?.currentVideoEndpoint?.watchEndpoint?.videoId
++        const contents = json?.contents?.singleColumnWatchNextResults?.results?.results?.contents
++        if (!Array.isArray(contents)) return
++        for (const section of contents) {
++            const items = section?.itemSectionRenderer?.contents
++            if (!Array.isArray(items)) continue
++            for (const item of items) {
++                const renderer = item?.videoMetadataRenderer || item?.musicWatchMetadataRenderer
++                if (renderer) this.remember(id, text(renderer.title))
++            }
++        }
++    }
++
++    observeRequest(url, body) {
++        if (typeof body !== 'string' || body.length > 1048576) return
++        try {
++            if (new URL(url, 'https://www.youtube.com').pathname !== '/youtubei/v1/search') return
++            const query = JSON.parse(body).query
++            if (typeof query === 'string' && query.length <= 200) this.searchQuery = query
++        } catch {}
++    }
++
++    get(id) { return this.titles.get(id) || '' }
++}
++
++module.exports = {MetadataCache}
+diff --git a/src/preload/util/bigscreen-navigation.js b/src/preload/util/bigscreen-navigation.js
+new file mode 100644
+index 0000000..729bd25
+--- /dev/null
++++ b/src/preload/util/bigscreen-navigation.js
+@@ -0,0 +1,25 @@
++const {ControlError} = require('../../bridge-protocol')
++
++// Retry only the fixed content request while Leanback completes its startup route.
++async function confirmNavigation(request, {deliver, read, now = Date.now,
++    delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))}) {
++    const startedAt = now()
++    let lastDelivery = startedAt
++    deliver(request)
++    while (now() - startedAt < 18000) {
++        const {view, media} = read()
++        if (request.content_type === 'video' && view.kind === 'watch'
++            && (view.video_id === request.content_id || media.video_id === request.content_id)) return 'video_selected'
++        if (request.content_type === 'playlist' && (view.playlist_id === request.content_id || media.playlist_id === request.content_id)) return 'playlist_selected'
++        if (request.content_type === 'search' && view.kind === 'search' && view.query === request.content_id) return 'search_opened'
++        // A listener may exist while the first navigation transition still discards links.
++        if (now() - lastDelivery >= 3000) {
++            deliver(request)
++            lastDelivery = now()
++        }
++        await delay(200)
++    }
++    throw new ControlError('navigation_failed', 'Leanback did not reach the requested content')
++}
++
++module.exports = {confirmNavigation}
+diff --git a/src/preload/util/bigscreen-player.js b/src/preload/util/bigscreen-player.js
+new file mode 100644
+index 0000000..0f221d2
+--- /dev/null
++++ b/src/preload/util/bigscreen-player.js
+@@ -0,0 +1,34 @@
++const {VIDEO_ID, ControlError} = require('../../bridge-protocol')
++
++function snapshot(player) {
++    const result = {media: {state: 'idle'}, capabilities: []}
++    if (!player || typeof player.getVideoData !== 'function') return result
++    const data = player.getVideoData()
++    const videoId = data?.video_id
++    if (typeof videoId !== 'string' || !VIDEO_ID.test(videoId)) return result
++    const state = player.getPlayerState?.()
++    result.media = {video_id: videoId, title: data.title,
++        state: ({1: 'playing', 2: 'paused', 3: 'buffering'})[state] || 'idle',
++        position: player.getCurrentTime?.(), duration: player.getDuration?.(), playlist_id: player.getPlaylistId?.()}
++    if (state === 1 && typeof player.pauseVideo === 'function') result.capabilities.push('pause')
++    if (state === 2 && typeof player.playVideo === 'function') result.capabilities.push('play')
++    if (typeof player.stopVideo === 'function') result.capabilities.push('stop')
++    if ([1, 2].includes(state) && Number.isFinite(result.media.duration) && result.media.duration > 0
++        && typeof player.seekTo === 'function') result.capabilities.push('seek')
++    return result
++}
++
++function execute(player, request) {
++    const state = snapshot(player)
++    if (!state.capabilities.includes(request.command)) throw new ControlError('unsupported', 'Player command is unavailable')
++    if (request.command === 'seek') {
++        if (typeof request.position !== 'number' || !Number.isFinite(request.position)
++            || request.position < 0 || request.position > state.media.duration) throw new ControlError('invalid_request', 'Invalid seek position')
++        player.seekTo(request.position, true)
++    } else {
++        player[{play: 'playVideo', pause: 'pauseVideo', stop: 'stopVideo'}[request.command]]()
++    }
++    return {delivery: 'player_called'}
++}
++
++module.exports = {snapshot, execute}
+diff --git a/src/preload/util/bigscreen-runtime.js b/src/preload/util/bigscreen-runtime.js
+new file mode 100644
+index 0000000..01cbb84
+--- /dev/null
++++ b/src/preload/util/bigscreen-runtime.js
+@@ -0,0 +1,99 @@
++const {ipcRenderer} = require('electron')
++const {navigationUrl} = require('../../bridge-protocol')
++const playerControl = require('./bigscreen-player')
++const resolveCommands = require('./resolveCommandModifiers')
++const {MetadataCache} = require('./bigscreen-metadata')
++const metadata = new MetadataCache()
++const {confirmNavigation} = require('./bigscreen-navigation')
++
++let volumeController = null
++let navigate = null
++let started = false
++
++function setVolumeController(controller) {
++    volumeController = controller
++    publish()
++}
++
++function setNavigation(handler) {
++    navigate = handler
++    publish()
++}
++
++function view() {
++    const route = new URL(location.hash.substring(1), location.href)
++    const kind = ({'/watch': 'watch', '/playlist': 'playlist', '/results': 'search', '/search': 'search', '/tv': 'home'})[route.pathname]
++    return {kind, query: route.searchParams.get('search_query') || route.searchParams.get('query') || (kind === 'search' ? metadata.searchQuery : null),
++        playlist_id: route.searchParams.get('list'), video_id: route.searchParams.get('v')}
++}
++
++function contentTypes() {
++    if (!navigate) return []
++    return resolveCommands.canResolveCommand() ? ['video', 'playlist', 'search'] : ['video', 'playlist']
++}
++
++function publish() {
++    try {
++        const player = document.querySelector('.html5-video-player')
++        const state = playerControl.snapshot(player)
++        if (volumeController) {
++            const volume = volumeController.snapshot()
++            state.media.volume = volume.level
++            state.media.muted = volume.muted
++            state.capabilities.push('volume_set', 'volume_mute')
++            const output = player?.getVolume?.()
++            if (Number.isFinite(output)) state.media.output_volume = output / 100
++        }
++        if (state.media.video_id && !state.media.title) state.media.title = metadata.get(state.media.video_id)
++        ipcRenderer.send('bigscreen-state', {...state, view: view(), ready: !!navigate,
++            content_types: contentTypes()})
++    } catch {
++        ipcRenderer.send('bigscreen-state', {ready: !!navigate, content_types: contentTypes()})
++    }
++}
++
++function deliverNavigation(request) {
++    if (!navigate) throw Object.assign(new Error('Leanback listener is not ready'), {code: 'not_ready'})
++    if (request.content_type === 'search') {
++        if (!resolveCommands.tryResolveCommand({searchEndpoint: {query: request.content_id}})) {
++            throw Object.assign(new Error('Search resolver is unavailable'), {code: 'not_ready'})
++        }
++    } else if (!navigate(navigationUrl(request.content_type, request.content_id))) {
++        throw Object.assign(new Error('Leanback did not accept delivery'), {code: 'not_ready'})
++    }
++}
++
++
++function start() {
++    if (started) return
++    started = true
++    require('./jsonModifiers').addModifier((json) => { metadata.observe(json); return json })
++    require('./xhrModifiers').addRequestModifier((url, body) => { metadata.observeRequest(url, body); return body })
++    ipcRenderer.on('bigscreen-command', async (event, request) => {
++        try {
++            let result
++            if (request.command === 'open') {
++                result = {delivery: await confirmNavigation(request, {deliver: deliverNavigation,
++                    read: () => ({view: view(), media: playerControl.snapshot(document.querySelector('.html5-video-player')).media})})}
++            } else if (request.command === 'volume_set' || request.command === 'volume_mute') {
++                if (!volumeController) throw Object.assign(new Error('Volume controller is unavailable'), {code: 'unsupported'})
++                if (request.command === 'volume_set') volumeController.setLevel(request.volume_level)
++                else volumeController.setMuted(request.muted)
++                result = {delivery: 'player_called'}
++            } else {
++                result = playerControl.execute(document.querySelector('.html5-video-player'), request)
++            }
++            publish()
++            ipcRenderer.send('bigscreen-complete', {id: request.id, ok: true, result})
++        } catch (error) {
++            ipcRenderer.send('bigscreen-complete', {id: request.id, ok: false,
++                error: {code: ['unsupported', 'invalid_request', 'not_ready', 'navigation_failed'].includes(error.code) ? error.code : 'command_failed',
++                    message: 'Leanback command could not be delivered'}})
++        }
++    })
++    const timer = setInterval(publish, 1000)
++    window.addEventListener('pagehide', () => { clearInterval(timer); ipcRenderer.send('bigscreen-gone') }, {once: true})
++    publish()
++}
++
++module.exports = {start, setNavigation, setVolumeController}
+diff --git a/src/preload/util/resolveCommandModifiers.js b/src/preload/util/resolveCommandModifiers.js
+index 09b0fef..1884a19 100644
+--- a/src/preload/util/resolveCommandModifiers.js
++++ b/src/preload/util/resolveCommandModifiers.js
+@@ -51,6 +51,13 @@ module.exports = {
+             .then(() => globalResolveCommand(command))
+         }
+     },
++    // Fixed local controls can report readiness instead of silently queuing forever.
++    tryResolveCommand: (command) => {
++        if (!globalResolveCommand) return false;
++        globalResolveCommand(command)
++        return true;
++    },
++    canResolveCommand: () => !!globalResolveCommand,
+     addInputModifier,
+     addOutputModifier
+ }
+diff --git a/test/bridge-control.test.js b/test/bridge-control.test.js
+new file mode 100644
+index 0000000..2a8fcb6
+--- /dev/null
++++ b/test/bridge-control.test.js
+@@ -0,0 +1,215 @@
++const test = require('node:test')
++const assert = require('node:assert/strict')
++const fs = require('node:fs')
++const os = require('node:os')
++const path = require('node:path')
++const net = require('node:net')
++const {BridgeControl, listen} = require('../src/bridge-control')
++const {validate, navigationUrl, sanitizeState, trustedFrame, ControlError} = require('../src/bridge-protocol')
++const player = require('../src/preload/util/bigscreen-player')
++
++const VIDEO = 'M7lc1UVf-VE'
++const ready = {ready: true, content_types: ['video'], capabilities: ['pause', 'seek'],
++    media: {video_id: VIDEO, title: 'Test', state: 'playing', duration: 120, position: 10}}
++
++function makeControl(extra = {}) {
++    return new BridgeControl({now: () => 10000, focus: async () => {}, dispatch: async () => ({delivery: 'player_called'}), ...extra})
++}
++
++test('validates typed IDs and builds only fixed YouTube URLs', () => {
++    assert.equal(navigationUrl('video', VIDEO), `https://www.youtube.com/watch?v=${VIDEO}`)
++    assert.equal(navigationUrl('search', 'cats & dogs'), 'https://www.youtube.com/results?search_query=cats%20%26%20dogs')
++    for (const request of [null, [], {}, {id: 'a', command: 'eval'}, {id: 'a', command: 'focus', url: 'https://example.org'},
++        {id: 'a', command: 'open', content_type: 'video', content_id: 'https://youtube.com/watch'},
++        {id: 'a', command: 'seek', position: true}, {id: 'a', command: 'seek', position: Infinity},
++        {id: 'a', command: 'open', content_type: 'search', content_id: '\nunsafe'}]) {
++        assert.throws(() => validate(request), ControlError)
++    }
++})
++
++test('sanitizes metadata and never trusts arbitrary artwork URLs or commands', () => {
++    assert.deepEqual(sanitizeState(null).capabilities, [])
++    assert.deepEqual(sanitizeState({content_types: {}, capabilities: 'seek'}).capabilities, [])
++    const state = sanitizeState({...ready, media: {...ready.media, thumbnail: 'file:///private', extra: 'secret'},
++        capabilities: ['eval', 'pause', 'seek', 'volume']})
++    assert.deepEqual(state.capabilities, ['pause', 'seek'])
++    assert.equal(state.media.thumbnail, `https://i.ytimg.com/vi/${VIDEO}/hqdefault.jpg`)
++    assert.equal(state.media.extra, undefined)
++    assert.deepEqual(sanitizeState({...ready, media: {video_id: 'invalid'}}).capabilities, [])
++})
++
++test('retries share an in-flight dispatch and replay an acknowledgement exactly once', async () => {
++    let resolve
++    let calls = 0
++    const control = makeControl({dispatch: () => { calls++; return new Promise((done) => { resolve = done }) }})
++    control.publish(ready)
++    const request = {id: 'pause', command: 'pause'}
++    const first = control.execute(request)
++    const duplicate = control.execute(request)
++    resolve({delivery: 'player_called'})
++    assert.deepEqual(await first, await duplicate)
++    assert.deepEqual(await control.execute(request), await first)
++    assert.equal(calls, 1)
++    assert.equal((await control.execute({id: 'pause', command: 'focus'})).error.code, 'invalid_request')
++})
++
++test('readiness failures can be retried, stale state drops control and seek is bounded', async () => {
++    let now = 10000
++    const control = makeControl({now: () => now})
++    const request = {id: 'open', command: 'open', content_type: 'video', content_id: VIDEO}
++    assert.equal((await control.execute(request)).error.code, 'not_ready')
++    control.publish(ready)
++    assert.equal((await control.execute(request)).ok, true)
++    assert.equal((await control.execute({id: 'seek', command: 'seek', position: 121})).error.code, 'invalid_request')
++    now += 5001
++    assert.equal(control.snapshot().ready, false)
++    assert.deepEqual(control.snapshot().capabilities, [])
++    control.invalidate()
++    assert.equal(control.snapshot().media.state, 'idle')
++})
++
++test('renderer state is accepted only from the current window and HTTPS Leanback frame', () => {
++    const win = {isDestroyed: () => false, webContents: {}}
++    const event = {sender: win.webContents, senderFrame: {url: 'https://www.youtube.com/tv'}}
++    assert.equal(trustedFrame(event, win), true)
++    assert.equal(trustedFrame({...event, sender: {}}, win), false)
++    for (const url of ['http://www.youtube.com/tv', 'https://evil.example/tv', 'file:///tv', 'https://www.youtube.com/watch?v=x']) {
++        assert.equal(trustedFrame({...event, senderFrame: {url}}, win), false)
++    }
++})
++
++test('player commands use existing Leanback APIs and advertise only callable features', () => {
++    const calls = []
++    const current = {getVideoData: () => ({video_id: VIDEO, title: 'Example'}), getPlayerState: () => 1,
++        getDuration: () => 100, getCurrentTime: () => 5, pauseVideo: () => calls.push('pause'),
++        seekTo: (...args) => calls.push(args)}
++    assert.deepEqual(player.snapshot(current).capabilities, ['pause', 'seek'])
++    player.execute(current, {command: 'pause'})
++    player.execute(current, {command: 'seek', position: 20})
++    assert.deepEqual(calls, ['pause', [20, true]])
++    assert.throws(() => player.execute(current, {command: 'seek', position: 101}), ControlError)
++    assert.throws(() => player.execute(current, {command: 'play'}), ControlError)
++})
++
++function exchange(socketPath, text) {
++    return new Promise((resolve, reject) => {
++        const socket = net.createConnection(socketPath)
++        let response = ''
++        socket.on('error', reject)
++        socket.on('data', (data) => { response += data })
++        socket.on('end', () => resolve(response ? JSON.parse(response) : null))
++        socket.on('connect', () => socket.write(text))
++    })
++}
++
++test('Unix transport is private, bounded and refuses an already-running endpoint', {skip: process.platform === 'win32'}, async (t) => {
++    const runtime = fs.mkdtempSync(path.join(os.tmpdir(), 'vt-control-'))
++    t.after(() => fs.rmSync(runtime, {recursive: true, force: true}))
++    const server = await listen(makeControl(), runtime)
++    try {
++        assert.equal(fs.statSync(path.dirname(server.socketPath)).mode & 0o777, 0o700)
++        assert.equal(fs.statSync(server.socketPath).mode & 0o777, 0o600)
++        const response = await exchange(server.socketPath, JSON.stringify({id: 'state', command: 'get_state'}) + '\n')
++        assert.equal(response.id, 'state')
++        assert.equal(response.result.protocol, 1)
++        assert.equal((await exchange(server.socketPath, '[]\n')).ok, false)
++        assert.equal((await exchange(server.socketPath, '{}\n{}\n')).error.code, 'invalid_request')
++        await assert.rejects(listen(makeControl(), runtime), /already in use/)
++        assert.equal(await exchange(server.socketPath, 'x'.repeat(17000) + '\n'), null)
++    } finally {
++        await server.close()
++    }
++})
++
++test('Unix transport rejects a symlink directory and a non-socket path', {skip: process.platform === 'win32'}, async (t) => {
++    const runtime = fs.mkdtempSync(path.join(os.tmpdir(), 'vt-unsafe-'))
++    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'vt-target-'))
++    t.after(() => { fs.rmSync(runtime, {recursive: true, force: true}); fs.rmSync(target, {recursive: true, force: true}) })
++    fs.symlinkSync(target, path.join(runtime, 'bigscreen-bridge'))
++    await assert.rejects(listen(makeControl(), runtime), /Unsafe runtime/)
++    fs.unlinkSync(path.join(runtime, 'bigscreen-bridge'))
++    fs.mkdirSync(path.join(runtime, 'bigscreen-bridge'))
++    fs.writeFileSync(path.join(runtime, 'bigscreen-bridge/vacuumtube.sock'), 'do not replace')
++    await assert.rejects(listen(makeControl(), runtime), /Unsafe socket/)
++})
++
++test('title cache matches IDs and observes public fields without mutating responses', () => {
++    const {MetadataCache} = require('../src/preload/util/bigscreen-metadata')
++    const cache = new MetadataCache()
++    const response = {videoDetails: {videoId: VIDEO, title: 'Actual title'}, streamingData: {secret: 'never retained'}}
++    const before = JSON.stringify(response)
++    cache.observe(response)
++    assert.equal(cache.get(VIDEO), 'Actual title')
++    assert.equal(JSON.stringify(response), before)
++    assert.equal(cache.get('other-video'), '')
++    cache.observe({currentVideoEndpoint: {watchEndpoint: {videoId: VIDEO}},
++        contents: {singleColumnWatchNextResults: {results: {results: {contents: [{itemSectionRenderer: {
++            contents: [{videoMetadataRenderer: {title: {runs: [{text: 'Updated '}, {text: 'title'}]}}}]}}]}}}}})
++    assert.equal(cache.get(VIDEO), 'Updated title')
++    assert.equal(JSON.stringify([...cache.titles]).includes('secret'), false)
++})
++
++test('search query verification observes only the public query of actual search requests', () => {
++    const {MetadataCache} = require('../src/preload/util/bigscreen-metadata')
++    const cache = new MetadataCache()
++    cache.observeRequest('/youtubei/v1/player', '{"query":"ignored"}')
++    assert.equal(cache.searchQuery, null)
++    const body = '{"query":"KDE Bigscreen","private":"not retained"}'
++    cache.observeRequest('/youtubei/v1/search?key=unused', body)
++    assert.equal(cache.searchQuery, 'KDE Bigscreen')
++    assert.equal(JSON.stringify(cache).includes('not retained'), false)
++})
++
++test('cold navigation retries a discarded startup link until the requested view exists', async () => {
++    const {confirmNavigation} = require('../src/preload/util/bigscreen-navigation')
++    let now = 0
++    let deliveries = 0
++    const result = await confirmNavigation({content_type: 'video', content_id: VIDEO}, {
++        now: () => now, delay: async (ms) => { now += ms }, deliver: () => deliveries++,
++        read: () => ({view: deliveries >= 2 ? {kind: 'watch', video_id: VIDEO} : {kind: 'home'}, media: {}})
++    })
++    assert.equal(result, 'video_selected')
++    assert.equal(deliveries, 2)
++})
++
++test('old player metadata alone cannot acknowledge navigation and failed links time out', async () => {
++    const {confirmNavigation} = require('../src/preload/util/bigscreen-navigation')
++    let now = 0
++    await assert.rejects(confirmNavigation({content_type: 'video', content_id: VIDEO}, {
++        now: () => now, delay: async (ms) => { now += ms }, deliver: () => {},
++        read: () => ({view: {kind: 'search'}, media: {video_id: VIDEO}})
++    }), (error) => error.code === 'navigation_failed')
++})
++
++test('search acknowledgement requires the actual query and catalogue commands serialize', async () => {
++    const {confirmNavigation} = require('../src/preload/util/bigscreen-navigation')
++    let now = 0
++    const result = await confirmNavigation({content_type: 'search', content_id: 'KDE'}, {
++        now: () => now, delay: async (ms) => { now += ms }, deliver: () => {},
++        read: () => ({view: {kind: 'search', query: now < 600 ? 'old query' : 'KDE'}, media: {}})
++    })
++    assert.equal(result, 'search_opened')
++    let finish
++    const control = makeControl({dispatch: () => new Promise((resolve) => { finish = resolve })})
++    control.publish(ready)
++    const first = control.execute({id: 'pause-1', command: 'pause'})
++    assert.equal((await control.execute({id: 'pause-2', command: 'pause'})).error.code, 'busy')
++    assert.equal((await control.execute({id: 'state', command: 'get_state'})).ok, true)
++    finish({delivery: 'player_called'})
++    assert.equal((await first).ok, true)
++})
++
++test('volume schema preserves mute separately and permits idle app volume only with a controller', () => {
++    assert.doesNotThrow(() => validate({id: 'level', command: 'volume_set', volume_level: 0.25}))
++    assert.doesNotThrow(() => validate({id: 'mute', command: 'volume_mute', muted: true}))
++    for (const volume_level of [-1, 2, NaN, Infinity, true, '0.5']) {
++        assert.throws(() => validate({id: 'level', command: 'volume_set', volume_level}), ControlError)
++    }
++    assert.throws(() => validate({id: 'mute', command: 'volume_mute', muted: 1}), ControlError)
++    const idle = sanitizeState({ready: true, capabilities: ['pause', 'volume_set', 'volume_mute'],
++        media: {state: 'idle', volume: 0.5, muted: true, output_volume: 0}})
++    assert.deepEqual(idle.capabilities, ['volume_set', 'volume_mute'])
++    assert.equal(idle.media.volume, 0.5)
++    assert.equal(idle.media.muted, true)
++    assert.equal(idle.media.output_volume, 0)
++})
+-- 
+2.54.0 (Apple Git-157)
+

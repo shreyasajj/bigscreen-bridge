@@ -1,0 +1,1502 @@
+From e6e483f7ab22a8e721c1f584bfa81c9c8d0a679e Mon Sep 17 00:00:00 2001
+From: shreyasajj <shreyas.github@proton.me>
+Date: Mon, 16 Nov 2026 11:31:07 -0600
+Subject: [PATCH] feat: Add local Bigscreen channel control
+
+Expose acknowledged local channel browsing, selection and player commands for the native Home Assistant bridge. Keep automation identities separate from legacy guide keys and exclude credentials and ambiguous M3U entries. Reuse the existing Qt player and timeshift recorder, guard against duplicate UI instances and test delayed catalogue readiness.
+---
+ CMakeLists.txt                                |   2 +
+ README.md                                     |   6 +
+ docs/bigscreen-bridge.md                      |  91 +++++
+ packaging/flatpak/build-bridge-flatpak.sh     |  62 ++++
+ packaging/flatpak/io.github.jclsn.Flimmer.yml |   1 +
+ qml/Main.qml                                  |  53 +++
+ src/bridgecontrol.cpp                         | 337 ++++++++++++++++++
+ src/bridgecontrol.h                           |  64 ++++
+ src/channelidentity.cpp                       |  54 +++
+ src/channelidentity.h                         |  20 ++
+ src/channelmodel.cpp                          |   3 +
+ src/channelmodel.h                            |   1 +
+ src/epgdatabase.cpp                           |  18 +-
+ src/epgstore.h                                |   2 +
+ src/m3u.cpp                                   |  13 +
+ src/main.cpp                                  |  43 ++-
+ src/sources/channelid.cpp                     |   4 +
+ tests/CMakeLists.txt                          |  18 +
+ tests/test_bridgecontrol.cpp                  | 225 ++++++++++++
+ tests/test_channelid.cpp                      |   6 +-
+ tests/test_channelidentity.cpp                |  54 +++
+ tests/test_epgdatabase.cpp                    |   2 +
+ tests/test_m3u.cpp                            |  22 ++
+ 23 files changed, 1090 insertions(+), 11 deletions(-)
+ create mode 100644 docs/bigscreen-bridge.md
+ create mode 100755 packaging/flatpak/build-bridge-flatpak.sh
+ create mode 100644 src/bridgecontrol.cpp
+ create mode 100644 src/bridgecontrol.h
+ create mode 100644 src/channelidentity.cpp
+ create mode 100644 src/channelidentity.h
+ create mode 100644 tests/test_bridgecontrol.cpp
+ create mode 100644 tests/test_channelidentity.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 5ecb2bd..019513b 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -142,6 +142,8 @@ qt_add_qml_module(flimmer
+         src/appsettings.h src/appsettings.cpp
+         src/tvhapi.h src/tvhapi.cpp
+         src/m3u.h src/m3u.cpp
++        src/channelidentity.h src/channelidentity.cpp
++        src/bridgecontrol.h src/bridgecontrol.cpp
+         src/xmltv.h src/xmltv.cpp
+         src/streambuffer.h src/streambuffer.cpp
+         src/streamproxy.h src/streamproxy.cpp
+diff --git a/README.md b/README.md
+index 4e11780..b67d459 100644
+--- a/README.md
++++ b/README.md
+@@ -14,6 +14,12 @@ theming and uses Breeze Dark by default.
+ * TVHeadend or M3U + XMLTV as the source
+ * Navigation with TV remote buttons
+ 
++## Bigscreen Bridge
++
++The local control endpoint supports acknowledged channel selection, paginated
++browsing, EPG and playback controls without exposing provider credentials. See
++[the interface and build guide](docs/bigscreen-bridge.md).
++
+ ## Screenshots
+ 
+ **Watching**: the info bar shows the channel, the current programme with its
+diff --git a/docs/bigscreen-bridge.md b/docs/bigscreen-bridge.md
+new file mode 100644
+index 0000000..fd529d8
+--- /dev/null
++++ b/docs/bigscreen-bridge.md
+@@ -0,0 +1,91 @@
++<!--
++SPDX-FileCopyrightText: 2026 shreyasajj
++SPDX-License-Identifier: CC-BY-SA-4.0
++-->
++
++# Local Bigscreen control
++
++Flimmer owns the session-bus name `io.github.jclsn.Flimmer.Control` and exports
++`Execute(string JSON) -> string JSON` at `/io/github/jclsn/Flimmer/Control`, using
++the same interface name. A second launch asks this endpoint to focus the existing
++window and exits. Plasma's external bridge confirms activation through KWin on
++Wayland; a local focus request alone cannot bypass compositor focus policy.
++
++Every request needs a nonempty string `id` (maximum 128 characters). Messages are
++limited to 16 KiB and unknown fields are rejected. Completed requests are cached
++(up to 128); retrying the same request ID returns the same acknowledgement without
++repeating the action. Reusing an ID with different data fails. Transient
++`not_ready` failures are retriable with the original ID.
++
++```json
++{"id":"state-1","command":"get_state"}
++{"id":"browse-1","command":"list_channels","offset":0,"limit":50}
++{"id":"focus-1","command":"focus"}
++{"id":"channel-1","command":"select_channel","channel_id":"channel-<64 hex digits from list_channels>"}
++{"id":"pause-1","command":"pause"}
++{"id":"play-1","command":"play"}
++{"id":"stop-1","command":"stop"}
++```
++
++Responses contain the request `id`, `ok`, and either `result` or `error` with a
++`code` and `message`. Channel selection returns `delivery: player_accepted` only
++after Main.qml accepts the operation. This acknowledges delivery, not successful
++network playback. Poll `get_state` for `playing`, `paused`, `buffering`, `idle` or
++`error`. Player commands are advertised dynamically: play resumes a paused player,
++pause pauses a playing player, and stop clears the channel. Resume uses the normal
++timeshift recorder. Seek and volume are not advertised by this endpoint.
++
++The state includes protocol version 1, QML readiness, `catalogue_loading`, content
++types, capabilities and media. The catalogue supplies `items`, `total`,
++`next_offset` (null on the last page), and `loading`; pages contain at most 50
++channels. A missing selection while the catalogue loads returns `not_ready`, so
++the bridge can deliver a cold-start request once channels arrive.
++
++Each channel supplies `id`, `name`, `number`, `current` and `next`. Programme
++`start`/`stop` values are Unix seconds. They describe the broadcast schedule,
++not a seekable playback position. Stream URLs, settings, credentials and raw
++player error strings never appear in this API. Provider artwork is omitted:
++credentials can appear in a logo URL path as well as its query. An authenticated
++image proxy is required before enabling it.
++
++## Stable channel identities
++
++Automation IDs are opaque SHA-256 identifiers and independent of displayed
++channel numbers. Provider IDs (including TVHeadend UUIDs) are namespaced by the
++persisted source ID. M3U control identities are stored separately from the legacy
++channel/guide keys, keeping existing guide matching and saved channels intact:
++
++- A unique `tvg-id` or `channel-id` survives reordering, renumbering and renaming.
++- Duplicate explicit IDs use unique channel names to disambiguate.
++- Entries without an explicit ID use a unique supplied name. Renaming changes it.
++- Identical ID/name pairs and unnamed entries without an ID are excluded from
++  remote selection. The app can still select them with its existing UI.
++
++Adding/removing duplicates can change automation IDs for that group. Old IDs then
++fail explicitly instead of selecting another channel. Stream tokens and URLs are
++never identity inputs. EPG cache schema 5 persists control IDs; older caches are
++refetched, while source settings and saved last-channel keys are preserved.
++
++## Build and verification
++
++The normal Flatpak manifest declares only the narrow control bus name. For a
++user-only development build against an installed Flimmer and KDE SDK 6.11:
++
++```sh
++git submodule update --init
++sh packaging/flatpak/build-bridge-flatpak.sh --install
++```
++
++The helper builds the pinned QtKeychain dependency, the app and all Qt tests,
++then packages a fresh export tree. It records the previous Flatpak commit in
++`~/.cache/flimmer-bridge-build/base-commit`. The normal YAML remains the clean
++production build. No system packages or sudo are needed for the helper.
++
++Qt tests cover stable IDs, legacy parser/guide behavior, cache persistence,
++EPG fields, pagination, strict schemas, replay handling, negotiated capabilities
++and delayed catalogue readiness. The companion bridge repository provides
++`scripts/fixture-flimmer.py`: it generates a synthetic MPEG-TS channel and XMLTV
++feed, runs the real TV application in a separate profile, checks authenticated
++browsing and playback/pause/timeshift resume, and restores the normal profile.
++It needs ffmpeg and an active Plasma session. It does not verify availability of
++the user's external IPTV provider.
+diff --git a/packaging/flatpak/build-bridge-flatpak.sh b/packaging/flatpak/build-bridge-flatpak.sh
+new file mode 100755
+index 0000000..088b251
+--- /dev/null
++++ b/packaging/flatpak/build-bridge-flatpak.sh
+@@ -0,0 +1,62 @@
++#!/bin/sh
++# SPDX-FileCopyrightText: 2026 shreyasajj
++#
++# SPDX-License-Identifier: BSD-2-Clause
++
++# User-only development build reusing an installed Flimmer runtime and libraries.
++# The YAML manifest remains the clean production build.
++set -eu
++app_id=io.github.jclsn.Flimmer
++source_root=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
++stage_root="${FLIMMER_BRIDGE_BUILD:-$HOME/.cache/flimmer-bridge-build}"
++keychain_root="$stage_root/qtkeychain-source"
++mkdir -p "$stage_root"
++flatpak info --user "$app_id" >/dev/null
++flatpak info --user org.kde.Sdk//6.11 >/dev/null
++if [ ! -f "$stage_root/app/metadata" ]; then
++    flatpak info --show-commit "$app_id" > "$stage_root/base-commit"
++    flatpak build-init --base="$app_id" --base-version=master "$stage_root/app" "$app_id" org.kde.Sdk org.kde.Platform 6.11
++fi
++if [ ! -d "$keychain_root/.git" ]; then
++    git clone https://github.com/frankosterfeld/qtkeychain.git "$keychain_root"
++fi
++git -C "$keychain_root" checkout --detach e63da2868465db18eb35a312b2635c26fdc46923
++flatpak build --filesystem="$source_root" --filesystem="$stage_root" "$stage_root/app" sh -c '
++    set -eu
++    cmake -S "$2/qtkeychain-source" -B "$2/keychain-bridge" -G Ninja -DCMAKE_INSTALL_PREFIX=/app \
++        -DBUILD_WITH_QT6=ON -DBUILD_TRANSLATIONS=OFF -DBUILD_TEST_APPLICATION=OFF -DLIBSECRET_SUPPORT=OFF
++    cmake --build "$2/keychain-bridge" -j4
++    cmake --install "$2/keychain-bridge"
++    cmake -S "$1" -B "$2/obj" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/app \
++        -DCMAKE_PREFIX_PATH=/app -DUSE_SYSTEM_BIGSCREEN_UI=OFF -DBUILD_TESTING=ON
++    cmake --build "$2/obj" -j4
++    ctest --test-dir "$2/obj" --output-on-failure
++    cmake --install "$2/obj"
++' sh "$source_root" "$stage_root"
++# CMake installs the native icon name; Flatpak exports only application-ID icons.
++python3 - "$stage_root/app/files" <<'PYICON'
++from pathlib import Path
++import shutil
++import sys
++root = Path(sys.argv[1])
++app_id = 'io.github.jclsn.Flimmer'
++for icon in (root / 'share/icons/hicolor').glob('*/apps/flimmer.*'):
++    shutil.copy2(icon, icon.with_name(app_id + icon.suffix))
++desktop = root / 'share/applications' / (app_id + '.desktop')
++desktop.write_text(desktop.read_text().replace('Icon=flimmer\n', 'Icon=' + app_id + '\n'))
++PYICON
++# Finalize a fresh export tree so incremental builds refresh launchers and icons.
++export_root=$(mktemp -d "$stage_root/export-XXXXXX")
++flatpak build-init "$export_root" "$app_id" org.kde.Sdk org.kde.Platform 6.11
++cp -a "$stage_root/app/files/." "$export_root/files/"
++flatpak build-finish "$export_root" --command=flimmer \
++    --own-name=io.github.jclsn.Flimmer.Control --share=ipc --share=network \
++    --socket=wayland --socket=fallback-x11 --socket=pulseaudio --device=dri \
++    --talk-name=org.freedesktop.ScreenSaver --talk-name=org.kde.kwalletd6 --talk-name=org.kde.kwalletd5 \
++    --filesystem=xdg-config/kdeglobals:ro --filesystem=xdg-data/color-schemes:ro --filesystem=xdg-videos
++flatpak build-export "$stage_root/repo" "$export_root"
++flatpak build-bundle "$stage_root/repo" "$stage_root/Flimmer-bridge.flatpak" "$app_id" master
++printf '%s\n' "Built: $stage_root/Flimmer-bridge.flatpak" "Rollback commit: $stage_root/base-commit"
++if [ "${1:-}" = --install ]; then
++    flatpak install --user --reinstall -y --noninteractive "$stage_root/Flimmer-bridge.flatpak"
++fi
+diff --git a/packaging/flatpak/io.github.jclsn.Flimmer.yml b/packaging/flatpak/io.github.jclsn.Flimmer.yml
+index 815155a..7fe3e75 100644
+--- a/packaging/flatpak/io.github.jclsn.Flimmer.yml
++++ b/packaging/flatpak/io.github.jclsn.Flimmer.yml
+@@ -18,6 +18,7 @@ command: flimmer
+ # Flatpak only exports icons named after the app ID. The launcher already is.
+ rename-icon: flimmer
+ finish-args:
++  - --own-name=io.github.jclsn.Flimmer.Control
+   - --share=ipc
+   - --share=network
+   - --socket=wayland
+diff --git a/qml/Main.qml b/qml/Main.qml
+index ba31186..7fb64ec 100644
+--- a/qml/Main.qml
++++ b/qml/Main.qml
+@@ -3,6 +3,7 @@
+ // SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
+ 
+ import QtQuick
++import QtMultimedia
+ import QtQuick.Controls as QQC2
+ import org.kde.kirigami as Kirigami
+ import org.kde.bigscreen.ui as BigscreenUI
+@@ -10,6 +11,7 @@ import Flimmer
+ 
+ QQC2.ApplicationWindow {
+     id: window
++    property var bridgeControl
+     property bool startWindowed: false
+     // "home": navigation + pages, "watch": fullscreen video with OSD
+     property string mode: "home"
+@@ -158,6 +160,55 @@ QQC2.ApplicationWindow {
+         anchors.fill: parent
+     }
+ 
++    function publishBridgeState() {
++        const state = player.error.length > 0 ? "error"
++            : !player.active ? "idle"
++            : player.paused ? "paused"
++            : player.mediaPlayer.playbackState === MediaPlayer.PlayingState ? "playing" : "buffering";
++        bridgeControl.publish(player.channelUuid, state, Tvh.busy);
++    }
++
++    Connections {
++        target: window.bridgeControl
++        function onFocusRequested() {
++            window.show();
++            window.raise();
++            window.requestActivate();
++        }
++        function onRequested(command, uuid) {
++            if (command === "select_channel") {
++                // A previous focus-loss resume must not replace the requested channel.
++                window.backgroundResumeUuid = "";
++                backgroundTimer.stop();
++                window.watch(uuid);
++            } else if (command === "stop") {
++                window.backgroundResumeUuid = "";
++                player.stop();
++            } else if ((command === "pause" && !player.paused)
++                       || (command === "play" && player.paused)) {
++                if (player.awaitingUrl) {
++                    window.bridgeControl.acknowledge(false);
++                    return;
++                }
++                player.togglePause();
++            } else {
++                window.bridgeControl.acknowledge(false);
++                return;
++            }
++            window.publishBridgeState();
++            window.bridgeControl.acknowledge(true);
++        }
++    }
++
++    Timer {
++        interval: 500
++        repeat: true
++        running: true
++        onTriggered: window.publishBridgeState()
++    }
++
++    Component.onDestruction: bridgeControl.setReady(false)
++
+     // The whole UI is laid out on a 1280x720 canvas and scaled to the screen.
+     Item {
+         id: stage
+@@ -398,6 +449,8 @@ QQC2.ApplicationWindow {
+     }
+ 
+     Component.onCompleted: {
++        publishBridgeState();
++        bridgeControl.setReady(true);
+         if (Settings.configured) {
+             window.goPage("channels", true);
+             const index = Tvh.channels.indexOfUuid(Settings.lastChannel);
+diff --git a/src/bridgecontrol.cpp b/src/bridgecontrol.cpp
+new file mode 100644
+index 0000000..12b91f2
+--- /dev/null
++++ b/src/bridgecontrol.cpp
+@@ -0,0 +1,337 @@
++// SPDX-FileCopyrightText: 2026 shreyasajj
++//
++// SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
++
++#include "bridgecontrol.h"
++
++#include "channelmodel.h"
++#include "epgstore.h"
++
++#include <QCryptographicHash>
++#include <QDateTime>
++#include <QJsonArray>
++#include <QJsonDocument>
++
++#include <cmath>
++
++namespace
++{
++// Bound local messages and the replay cache even for untrusted callers.
++constexpr int s_maxRequestBytes = 16384;
++// Keep enough completed requests for clients to retry without repeating actions.
++constexpr int s_maxCachedRequests = 128;
++// Large provider catalogues are read one bounded page at a time.
++constexpr int s_maxPageSize = 50;
++
++QJsonObject failure(const QString &code, const QString &message)
++{
++    return {{QStringLiteral("ok"), false},
++            {QStringLiteral("error"),
++             QJsonObject{{QStringLiteral("code"), code}, {QStringLiteral("message"), message}}}};
++}
++
++QJsonObject success(const QJsonObject &result)
++{
++    return {{QStringLiteral("ok"), true}, {QStringLiteral("result"), result}};
++}
++
++bool boundedInteger(const QJsonValue &value, int maximum)
++{
++    const double number = value.toDouble(-1);
++
++    return value.isDouble() && std::isfinite(number) && number >= 0 && number <= maximum
++        && std::floor(number) == number;
++}
++}
++
++BridgeControl::BridgeControl(ChannelModel *channels, QObject *parent)
++    : QObject(parent)
++    , m_channels(channels)
++{
++}
++
++QString BridgeControl::serviceName()
++{
++    return QStringLiteral("io.github.jclsn.Flimmer.Control");
++}
++
++QString BridgeControl::objectPath()
++{
++    return QStringLiteral("/io/github/jclsn/Flimmer/Control");
++}
++
++QString BridgeControl::channelId(const Channel &channel)
++{
++    // M3U channels must have an unambiguous identity assigned by the parser.
++    if (channel.controlId.isEmpty() && !channel.stream.isEmpty()) {
++        return {};
++    }
++
++    const QString identity = channel.controlId.isEmpty()
++        ? QStringLiteral("provider:") + channel.uuid
++        : QStringLiteral("playlist:") + channel.controlId;
++
++    if (channel.uuid.isEmpty()) {
++        return {};
++    }
++
++    return QStringLiteral("channel-")
++        + QString::fromLatin1(
++               QCryptographicHash::hash(identity.toUtf8(), QCryptographicHash::Sha256).toHex());
++}
++
++QJsonObject BridgeControl::channel(int row) const
++{
++    const Channel &entry = m_channels->channels().at(row);
++    const QVariantMap guide = m_channels->get(row);
++    // Artwork URLs may embed provider secrets in their path, not only the query.
++    // Omit them until an authenticated image proxy can serve the bytes safely.
++    return {
++        {QStringLiteral("id"), channelId(entry)},
++        {QStringLiteral("name"), entry.name.left(512)},
++        {QStringLiteral("number"), entry.number},
++        {QStringLiteral("current"),
++         QJsonObject{
++             {QStringLiteral("title"),
++              guide.value(QStringLiteral("nowTitle")).toString().left(2048)},
++             {QStringLiteral("start"), guide.value(QStringLiteral("nowStart")).toDouble() / 1000.0},
++             {QStringLiteral("stop"), guide.value(QStringLiteral("nowStop")).toDouble() / 1000.0}}},
++        {QStringLiteral("next"),
++         QJsonObject{{QStringLiteral("title"),
++                      guide.value(QStringLiteral("nextTitle")).toString().left(2048)},
++                     {QStringLiteral("start"),
++                      guide.value(QStringLiteral("nextStart")).toDouble() / 1000.0},
++                     {QStringLiteral("stop"),
++                      guide.value(QStringLiteral("nextStop")).toDouble() / 1000.0}}}};
++}
++
++QJsonObject BridgeControl::snapshot() const
++{
++    QJsonObject media{{QStringLiteral("state"), m_state},
++                      {QStringLiteral("updated_at"),
++                       QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
++    const int row = m_channels->indexOfUuid(m_channelUuid);
++
++    if (row >= 0) {
++        media.insert(QStringLiteral("channel"), channel(row));
++    }
++
++    QJsonArray capabilities;
++
++    if (m_ready && !m_channelUuid.isEmpty()) {
++        capabilities.append(QStringLiteral("stop"));
++
++        if (m_state == QLatin1String("playing")) {
++            capabilities.append(QStringLiteral("pause"));
++        } else if (m_state == QLatin1String("paused")) {
++            capabilities.append(QStringLiteral("play"));
++        }
++    }
++
++    return {{QStringLiteral("protocol"), 1},
++            {QStringLiteral("ready"), m_ready},
++            {QStringLiteral("content_types"), QJsonArray{QStringLiteral("channel")}},
++            {QStringLiteral("catalogue_loading"), m_catalogueLoading},
++            {QStringLiteral("capabilities"), capabilities},
++            {QStringLiteral("media"), media}};
++}
++
++void BridgeControl::setReady(bool ready)
++{
++    m_ready = ready;
++}
++
++void BridgeControl::publish(const QString &channelUuid, const QString &state, bool catalogueLoading)
++{
++    const QStringList states{QStringLiteral("idle"),
++                             QStringLiteral("playing"),
++                             QStringLiteral("paused"),
++                             QStringLiteral("buffering"),
++                             QStringLiteral("error")};
++    m_catalogueLoading = catalogueLoading;
++    m_channelUuid = channelUuid;
++    m_state = states.contains(state) ? state : QStringLiteral("idle");
++}
++
++void BridgeControl::acknowledge(bool accepted)
++{
++    m_acknowledged = accepted;
++}
++
++QJsonObject BridgeControl::execute(const QJsonObject &request)
++{
++    const QString command = request.value(QStringLiteral("command")).toString();
++    QStringList allowed{QStringLiteral("id"), QStringLiteral("command")};
++
++    if (command == QLatin1String("select_channel")) {
++        allowed << QStringLiteral("channel_id");
++    } else if (command == QLatin1String("list_channels")) {
++        allowed << QStringLiteral("offset") << QStringLiteral("limit");
++    } else if (!QStringList{QStringLiteral("get_state"),
++                            QStringLiteral("focus"),
++                            QStringLiteral("play"),
++                            QStringLiteral("pause"),
++                            QStringLiteral("stop")}
++                    .contains(command)) {
++        return failure(QStringLiteral("unsupported"), QStringLiteral("Unsupported command"));
++    }
++
++    for (auto it = request.begin(); it != request.end(); ++it) {
++        if (!allowed.contains(it.key())) {
++            return failure(QStringLiteral("invalid_request"),
++                           QStringLiteral("Unknown request fields"));
++        }
++    }
++
++    if (command == QLatin1String("get_state")) {
++        return success(snapshot());
++    }
++
++    if (command == QLatin1String("focus")) {
++        Q_EMIT focusRequested();
++
++        return success({{QStringLiteral("delivery"), QStringLiteral("focus_requested")}});
++    }
++
++    if (!m_ready) {
++        return failure(QStringLiteral("not_ready"), QStringLiteral("The application is not ready"));
++    }
++
++    if (command == QLatin1String("list_channels")) {
++        return listChannels(request);
++    }
++
++    return playerCommand(request);
++}
++
++QJsonObject BridgeControl::listChannels(const QJsonObject &request) const
++{
++    const auto offsetValue = request.value(QStringLiteral("offset"));
++    const auto limitValue = request.value(QStringLiteral("limit"));
++
++    if ((!offsetValue.isUndefined() && !boundedInteger(offsetValue, 1000000))
++        || (!limitValue.isUndefined()
++            && (!boundedInteger(limitValue, s_maxPageSize) || limitValue.toInt() == 0))) {
++        return failure(QStringLiteral("invalid_request"), QStringLiteral("Invalid page bounds"));
++    }
++
++    const int offset = offsetValue.toInt(0);
++    const int limit = limitValue.toInt(s_maxPageSize);
++    QJsonArray items;
++    int total = 0;
++
++    for (int row = 0; row < m_channels->rowCount(); ++row) {
++        if (channelId(m_channels->channels().at(row)).isEmpty()) {
++            continue;
++        }
++
++        if (total >= offset && items.size() < limit) {
++            items.append(channel(row));
++        }
++
++        ++total;
++    }
++
++    const int next = offset + static_cast<int>(items.size());
++
++    return success(
++        {{QStringLiteral("items"), items},
++         {QStringLiteral("loading"), m_catalogueLoading},
++         {QStringLiteral("total"), total},
++         {QStringLiteral("next_offset"), next < total ? QJsonValue(next) : QJsonValue()}});
++}
++
++QJsonObject BridgeControl::playerCommand(const QJsonObject &request)
++{
++    const QString command = request.value(QStringLiteral("command")).toString();
++
++    QString uuid;
++
++    if (command == QLatin1String("select_channel")) {
++        const QString id = request.value(QStringLiteral("channel_id")).toString();
++
++        if (id.isEmpty() || id.size() > 128) {
++            return failure(QStringLiteral("invalid_request"),
++                           QStringLiteral("A channel ID is required"));
++        }
++
++        for (const Channel &entry : m_channels->channels()) {
++            if (channelId(entry) == id) {
++                uuid = entry.uuid;
++                break;
++            }
++        }
++
++        if (uuid.isEmpty() && m_catalogueLoading) {
++            return failure(QStringLiteral("not_ready"),
++                           QStringLiteral("The channel catalogue is loading"));
++        }
++
++        if (uuid.isEmpty()) {
++            return failure(QStringLiteral("not_found"),
++                           QStringLiteral("Unknown or ambiguous channel ID"));
++        }
++    } else if (!snapshot().value(QStringLiteral("capabilities")).toArray().contains(command)) {
++        return failure(QStringLiteral("unsupported"),
++                       QStringLiteral("Player command is unavailable"));
++    }
++
++    m_acknowledged = false;
++    Q_EMIT requested(command, uuid);
++
++    if (!m_acknowledged) {
++        return failure(QStringLiteral("not_ready"),
++                       QStringLiteral("The player did not accept the command"));
++    }
++
++    return success({{QStringLiteral("delivery"), QStringLiteral("player_accepted")},
++                    {QStringLiteral("media"), snapshot().value(QStringLiteral("media"))}});
++}
++
++QString BridgeControl::Execute(const QString &payload)
++{
++    const QByteArray bytes = payload.toUtf8();
++    const QJsonDocument document =
++        bytes.size() <= s_maxRequestBytes ? QJsonDocument::fromJson(bytes) : QJsonDocument();
++    const QJsonObject request = document.object();
++    const QString id = request.value(QStringLiteral("id")).toString();
++    QJsonObject response;
++
++    if (bytes.size() > s_maxRequestBytes || !document.isObject() || id.isEmpty()
++        || id.size() > 128) {
++        response = failure(QStringLiteral("invalid_request"),
++                           QStringLiteral("A bounded JSON request and string ID are required"));
++    } else if (m_cache.contains(id)) {
++        const Cached &cached = m_cache[id];
++
++        if (cached.request == request) {
++            return cached.response;
++        }
++
++        response = failure(QStringLiteral("invalid_request"),
++                           QStringLiteral("Request ID reused with different data"));
++    } else {
++        response = execute(request);
++        response.insert(QStringLiteral("id"), id);
++        const QString serialized =
++            QString::fromUtf8(QJsonDocument(response).toJson(QJsonDocument::Compact));
++        if (!response.value(QStringLiteral("ok")).toBool()
++            && response.value(QStringLiteral("error")).toObject().value(QStringLiteral("code"))
++                == QLatin1String("not_ready")) {
++            return serialized;
++        }
++
++        m_cache.insert(id, {request, serialized});
++        m_order.enqueue(id);
++
++        while (m_order.size() > s_maxCachedRequests) {
++            m_cache.remove(m_order.dequeue());
++        }
++
++        return serialized;
++    }
++
++    response.insert(QStringLiteral("id"), id);
++
++    return QString::fromUtf8(QJsonDocument(response).toJson(QJsonDocument::Compact));
++}
+diff --git a/src/bridgecontrol.h b/src/bridgecontrol.h
+new file mode 100644
+index 0000000..4b26f8e
+--- /dev/null
++++ b/src/bridgecontrol.h
+@@ -0,0 +1,64 @@
++/*
++ * SPDX-FileCopyrightText: 2026 shreyasajj
++ *
++ * SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
++ */
++
++#ifndef BRIDGECONTROL_H
++#define BRIDGECONTROL_H
++
++#include <QHash>
++#include <QJsonObject>
++#include <QObject>
++#include <QQueue>
++
++class ChannelModel;
++struct Channel;
++
++// Narrow local control endpoint. Main.qml acknowledges fixed player operations;
++// the channel model supplies a public catalogue without streams or credentials.
++class BridgeControl : public QObject
++{
++    Q_OBJECT
++    Q_CLASSINFO("D-Bus Interface", "io.github.jclsn.Flimmer.Control")
++
++public:
++    explicit BridgeControl(ChannelModel *channels, QObject *parent = nullptr);
++    static QString serviceName();
++    static QString objectPath();
++    static QString channelId(const Channel &channel);
++    Q_INVOKABLE void setReady(bool ready);
++    Q_INVOKABLE void
++    publish(const QString &channelUuid, const QString &state, bool catalogueLoading = false);
++    Q_INVOKABLE void acknowledge(bool accepted);
++
++public Q_SLOTS:
++    QString Execute(const QString &payload);
++
++Q_SIGNALS:
++    void requested(const QString &command, const QString &channelUuid);
++    void focusRequested();
++
++private:
++    struct Cached {
++        QJsonObject request;
++        QString response;
++    };
++
++    ChannelModel *m_channels;
++    bool m_ready = false;
++    bool m_acknowledged = false;
++    bool m_catalogueLoading = false;
++    QString m_channelUuid;
++    QString m_state = QStringLiteral("idle");
++    QHash<QString, Cached> m_cache;
++    QQueue<QString> m_order;
++
++    QJsonObject channel(int row) const;
++    QJsonObject snapshot() const;
++    QJsonObject listChannels(const QJsonObject &request) const;
++    QJsonObject playerCommand(const QJsonObject &request);
++    QJsonObject execute(const QJsonObject &request);
++};
++
++#endif // BRIDGECONTROL_H
+diff --git a/src/channelidentity.cpp b/src/channelidentity.cpp
+new file mode 100644
+index 0000000..6786519
+--- /dev/null
++++ b/src/channelidentity.cpp
+@@ -0,0 +1,54 @@
++// SPDX-FileCopyrightText: 2026 shreyasajj
++//
++// SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
++
++#include "channelidentity.h"
++
++#include <QCryptographicHash>
++#include <QHash>
++#include <QJsonArray>
++#include <QJsonDocument>
++
++QStringList ChannelIdentity::forPlaylist(const QStringList &explicitIds, const QStringList &names)
++{
++    if (explicitIds.size() != names.size()) {
++        return {};
++    }
++
++    QHash<QString, int> counts;
++
++    for (const QString &id : explicitIds) {
++        ++counts[id];
++    }
++
++    QStringList keys;
++    QHash<QString, int> keyCounts;
++
++    for (qsizetype i = 0; i < explicitIds.size(); ++i) {
++        const QString &id = explicitIds.at(i);
++        const QString &name = names.at(i);
++        const bool uniqueId = !id.isEmpty() && counts.value(id) == 1;
++        const QJsonArray identity{QStringLiteral("m3u-v1"), id, uniqueId ? QString() : name};
++        const QString key = !uniqueId && name.isEmpty()
++            ? QString()
++            : QString::fromUtf8(QJsonDocument(identity).toJson(QJsonDocument::Compact));
++        keys.append(key);
++        ++keyCounts[key];
++    }
++
++    QStringList result;
++
++    for (const QString &key : keys) {
++        if (key.isEmpty() || keyCounts.value(key) != 1) {
++            result.append(QString());
++            continue;
++        }
++
++        result.append(
++            QStringLiteral("m3u-")
++            + QString::fromLatin1(
++                QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Sha256).toHex()));
++    }
++
++    return result;
++}
+diff --git a/src/channelidentity.h b/src/channelidentity.h
+new file mode 100644
+index 0000000..c9ed183
+--- /dev/null
++++ b/src/channelidentity.h
+@@ -0,0 +1,20 @@
++/*
++ * SPDX-FileCopyrightText: 2026 shreyasajj
++ *
++ * SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
++ */
++
++#ifndef CHANNELIDENTITY_H
++#define CHANNELIDENTITY_H
++
++#include <QStringList>
++
++// Automation identities stay separate from legacy channel/guide keys. They never
++// depend on stream URLs, credentials, channel numbers or playlist order.
++namespace ChannelIdentity
++{
++// Empty results deliberately exclude ambiguous or unnamed entries from control.
++QStringList forPlaylist(const QStringList &explicitIds, const QStringList &names);
++}
++
++#endif // CHANNELIDENTITY_H
+diff --git a/src/channelmodel.cpp b/src/channelmodel.cpp
+index 3a2db4e..e2ea0ef 100644
+--- a/src/channelmodel.cpp
++++ b/src/channelmodel.cpp
+@@ -35,6 +35,7 @@ QHash<int, QByteArray> ChannelModel::roleNames() const
+         {NowRecordingRole, "nowRecording"},
+         {NextTitleRole, "nextTitle"},
+         {NextStartRole, "nextStart"},
++        {NextStopRole, "nextStop"},
+     };
+ 
+     return roles;
+@@ -90,6 +91,8 @@ QVariant ChannelModel::data(const QModelIndex &index, int role) const
+         return nowNext.next ? nowNext.next->title : QString();
+     case NextStartRole:
+         return nowNext.next ? static_cast<double>(nowNext.next->start) * 1000.0 : 0.0;
++    case NextStopRole:
++        return nowNext.next ? static_cast<double>(nowNext.next->stop) * 1000.0 : 0.0;
+     default:
+         return {};
+     }
+diff --git a/src/channelmodel.h b/src/channelmodel.h
+index 67d8698..7c525a5 100644
+--- a/src/channelmodel.h
++++ b/src/channelmodel.h
+@@ -37,6 +37,7 @@ public:
+         NowRecordingRole,
+         NextTitleRole,
+         NextStartRole,
++        NextStopRole,
+     };
+     Q_ENUM(Role)
+ 
+diff --git a/src/epgdatabase.cpp b/src/epgdatabase.cpp
+index c6c906a..8f5eee8 100644
+--- a/src/epgdatabase.cpp
++++ b/src/epgdatabase.cpp
+@@ -13,8 +13,8 @@
+ 
+ namespace
+ {
+-// Version 4 prefixed channel IDs with their source.
+-constexpr int s_schemaVersion = 4;
++// Version 5 caches stable automation identities separately from guide keys.
++constexpr int s_schemaVersion = 5;
+ // Meta key of a source's identity.
+ constexpr QLatin1StringView s_identityKey{"source/%1/identity"};
+ 
+@@ -96,7 +96,7 @@ bool EpgDatabase::open()
+             QStringLiteral("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)"),
+             QStringLiteral(
+                 "CREATE TABLE IF NOT EXISTS channels (uuid TEXT PRIMARY KEY, number INTEGER, "
+-                "name TEXT, icon TEXT, position INTEGER, stream TEXT)"),
++                "name TEXT, icon TEXT, position INTEGER, stream TEXT, control_id TEXT)"),
+             QStringLiteral(
+                 "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, channel TEXT NOT NULL, "
+                 "start INTEGER NOT NULL, stop INTEGER NOT NULL, title TEXT, subtitle TEXT, summary "
+@@ -224,9 +224,9 @@ void EpgDatabase::saveChannels(const QString &sourceId, const QVector<Channel> &
+         query.addBindValue(prefix.size());
+         query.addBindValue(prefix);
+         query.exec();
+-        query.prepare(
+-            QStringLiteral("INSERT INTO channels (uuid, number, name, icon, position, stream) "
+-                           "VALUES (?, ?, ?, ?, ?, ?)"));
++        query.prepare(QStringLiteral(
++            "INSERT INTO channels (uuid, number, name, icon, position, stream, control_id) "
++            "VALUES (?, ?, ?, ?, ?, ?, ?)"));
+ 
+         for (int i = 0; i < channels.size(); ++i) {
+             const Channel &channel = channels.at(i);
+@@ -236,6 +236,7 @@ void EpgDatabase::saveChannels(const QString &sourceId, const QVector<Channel> &
+             query.addBindValue(channel.icon);
+             query.addBindValue(i);
+             query.addBindValue(channel.stream);
++            query.addBindValue(channel.controlId);
+             query.exec();
+         }
+ 
+@@ -250,8 +251,8 @@ QVector<Channel> EpgDatabase::loadChannels() const
+     runAndWait([this, &result] {
+         QSqlQuery query(QSqlDatabase::database(m_connectionName));
+ 
+-        if (!query.exec(QStringLiteral(
+-                "SELECT uuid, number, name, icon, stream FROM channels ORDER BY position"))) {
++        if (!query.exec(QStringLiteral("SELECT uuid, number, name, icon, stream, control_id FROM "
++                                       "channels ORDER BY position"))) {
+             return;
+         }
+ 
+@@ -262,6 +263,7 @@ QVector<Channel> EpgDatabase::loadChannels() const
+                 .name = query.value(2).toString(),
+                 .icon = query.value(3).toString(),
+                 .stream = query.value(4).toString(),
++                .controlId = query.value(5).toString(),
+             });
+         }
+     });
+diff --git a/src/epgstore.h b/src/epgstore.h
+index 9c07cc4..aea1ecc 100644
+--- a/src/epgstore.h
++++ b/src/epgstore.h
+@@ -20,6 +20,8 @@ struct Channel {
+     QString icon; // as reported by the server, may be relative ("imagecache/12")
+     QString stream; // M3U sources only; TVHeadend streams are built from the uuid
+ 
++    QString controlId; // Stable automation ID; empty for ambiguous M3U entries.
++
+     static Channel fromJson(const QJsonObject &object);
+ };
+ 
+diff --git a/src/m3u.cpp b/src/m3u.cpp
+index 3e1b159..55d155d 100644
+--- a/src/m3u.cpp
++++ b/src/m3u.cpp
+@@ -4,6 +4,8 @@
+ 
+ #include "m3u.h"
+ 
++#include "channelidentity.h"
++
+ #include <QHash>
+ #include <QObject>
+ #include <QRegularExpression>
+@@ -88,6 +90,8 @@ M3u::Playlist M3u::parse(const QByteArray &data, const QUrl &source)
+ {
+     Playlist playlist;
+     QSet<QString> usedUuids;
++    QStringList explicitIds;
++    QStringList controlNames;
+     std::optional<Entry> pending;
+ 
+     const QString text = QString::fromUtf8(data);
+@@ -138,6 +142,8 @@ M3u::Playlist M3u::parse(const QByteArray &data, const QUrl &source)
+             channel.name = tvgName;
+         }
+ 
++        controlNames.append(channel.name);
++
+         if (channel.name.isEmpty()) {
+             channel.name = QObject::tr("Channel %1").arg(playlist.channels.size() + 1);
+         }
+@@ -150,6 +156,7 @@ M3u::Playlist M3u::parse(const QByteArray &data, const QUrl &source)
+ 
+         // Stable ids keep the last watched channel across playlist updates.
+         const QString tvgId = attribute(entry, {"tvg-id", "channel-id"});
++        explicitIds.append(tvgId);
+         const QString base = !tvgId.isEmpty() ? tvgId : channel.name;
+ 
+         channel.uuid = base;
+@@ -171,6 +178,12 @@ M3u::Playlist M3u::parse(const QByteArray &data, const QUrl &source)
+         playlist.channels.append(std::move(channel));
+     }
+ 
++    const QStringList controlIds = ChannelIdentity::forPlaylist(explicitIds, controlNames);
++
++    for (qsizetype i = 0; i < playlist.channels.size(); ++i) {
++        playlist.channels[i].controlId = controlIds.at(i);
++    }
++
+     const bool numbered = std::ranges::any_of(playlist.channels, [](const Channel &channel) {
+         return channel.number > 0;
+     });
+diff --git a/src/main.cpp b/src/main.cpp
+index fc96816..47b17ed 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -3,20 +3,26 @@
+ // SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
+ 
+ #include "appsettings.h"
++#include "bridgecontrol.h"
+ #include "inputdebug.h"
+ #include "logoimageprovider.h"
+ #include "remotekeys.h"
++#include "tvhbackend.h"
+ #ifdef FLIMMER_DEV_TOOLS
+ #include "devscript.h"
+ #endif
+ 
+ #include <QApplication>
+ #include <QCommandLineParser>
++#include <QDBusConnection>
++#include <QDBusInterface>
+ #include <QDir>
+ #include <QIcon>
++#include <QJsonDocument>
+ #include <QQmlApplicationEngine>
+ #include <QQuickStyle>
+ #include <QStyleFactory>
++#include <QUuid>
+ 
+ int main(int argc, char *argv[])
+ {
+@@ -49,6 +55,39 @@ int main(int argc, char *argv[])
+     parser.addOption(windowed);
+     parser.process(app);
+ 
++    auto bus = QDBusConnection::sessionBus();
++
++    if (!bus.isConnected()) {
++        qWarning("A session bus is required for single-instance control");
++
++        return 1;
++    }
++
++    if (!bus.registerService(BridgeControl::serviceName())) {
++        QDBusInterface existing(BridgeControl::serviceName(),
++                                BridgeControl::objectPath(),
++                                BridgeControl::serviceName(),
++                                bus);
++        const QJsonObject request{
++            {QStringLiteral("id"), QUuid::createUuid().toString(QUuid::WithoutBraces)},
++            {QStringLiteral("command"), QStringLiteral("focus")}};
++        const auto reply =
++            existing.call(QStringLiteral("Execute"),
++                          QString::fromUtf8(QJsonDocument(request).toJson(QJsonDocument::Compact)));
++
++        return reply.type() == QDBusMessage::ErrorMessage ? 1 : 0;
++    }
++
++    BridgeControl bridgeControl(TvhBackend::instance()->channels());
++
++    if (!bus.registerObject(BridgeControl::objectPath(),
++                            &bridgeControl,
++                            QDBusConnection::ExportAllSlots)) {
++        qWarning("Cannot register the local control endpoint");
++
++        return 1;
++    }
++
+     // Follow Plasma's look; outside a Plasma session fall back to Breeze explicitly.
+     const bool plasmaSession =
+         qEnvironmentVariable("XDG_CURRENT_DESKTOP").contains(QLatin1String("KDE"));
+@@ -85,7 +124,9 @@ int main(int argc, char *argv[])
+ #endif
+ 
+     engine.addImageProvider(QStringLiteral("logo"), new LogoImageProvider);
+-    engine.setInitialProperties({{QStringLiteral("startWindowed"), parser.isSet(windowed)}});
++    engine.setInitialProperties(
++        {{QStringLiteral("startWindowed"), parser.isSet(windowed)},
++         {QStringLiteral("bridgeControl"), QVariant::fromValue(&bridgeControl)}});
+     QObject::connect(
+         &engine,
+         &QQmlApplicationEngine::objectCreationFailed,
+diff --git a/src/sources/channelid.cpp b/src/sources/channelid.cpp
+index c92dd0a..25f1af3 100644
+--- a/src/sources/channelid.cpp
++++ b/src/sources/channelid.cpp
+@@ -52,6 +52,10 @@ QVector<Channel> ChannelId::prefixed(const QString &sourceId, QVector<Channel> c
+ {
+     for (Channel &channel : channels) {
+         channel.uuid = make(sourceId, channel.uuid);
++
++        if (!channel.controlId.isEmpty()) {
++            channel.controlId = make(sourceId, channel.controlId);
++        }
+     }
+ 
+     return channels;
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index d0b0eb4..4eb9864 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -29,6 +29,7 @@ flimmer_add_test(
+     test_m3u
+     SOURCES
+         ${PROJECT_SOURCE_DIR}/src/m3u.cpp
++        ${PROJECT_SOURCE_DIR}/src/channelidentity.cpp
+         ${PROJECT_SOURCE_DIR}/src/epgstore.cpp
+     LIBRARIES Qt6::Core
+ )
+@@ -117,6 +118,7 @@ flimmer_add_test(
+         ${PROJECT_SOURCE_DIR}/src/sources/headers.cpp
+         ${PROJECT_SOURCE_DIR}/src/sources/sourceconfig.cpp
+         ${PROJECT_SOURCE_DIR}/src/m3u.cpp
++        ${PROJECT_SOURCE_DIR}/src/channelidentity.cpp
+         ${PROJECT_SOURCE_DIR}/src/tvhapi.cpp
+         ${PROJECT_SOURCE_DIR}/src/networkauth.cpp
+         ${PROJECT_SOURCE_DIR}/src/serverconfig.cpp
+@@ -178,6 +180,7 @@ flimmer_add_test(
+         ${PROJECT_SOURCE_DIR}/src/epgdatabase.cpp
+         ${PROJECT_SOURCE_DIR}/src/epgstore.cpp
+         ${PROJECT_SOURCE_DIR}/src/m3u.cpp
++        ${PROJECT_SOURCE_DIR}/src/channelidentity.cpp
+         ${PROJECT_SOURCE_DIR}/src/xmltv.cpp
+         ${PROJECT_SOURCE_DIR}/src/networkauth.cpp
+         ${PROJECT_SOURCE_DIR}/src/serverconfig.cpp
+@@ -205,3 +208,18 @@ flimmer_add_test(
+         Qt6::Sql
+         Qt6Keychain::Qt6Keychain
+ )
++
++flimmer_add_test(
++    test_channelidentity
++    SOURCES ${PROJECT_SOURCE_DIR}/src/channelidentity.cpp
++    LIBRARIES Qt6::Core
++)
++
++flimmer_add_test(
++    test_bridgecontrol
++    SOURCES
++        ${PROJECT_SOURCE_DIR}/src/bridgecontrol.cpp
++        ${PROJECT_SOURCE_DIR}/src/channelmodel.cpp
++        ${PROJECT_SOURCE_DIR}/src/epgstore.cpp
++    LIBRARIES Qt6::Core Qt6::Qml
++)
+diff --git a/tests/test_bridgecontrol.cpp b/tests/test_bridgecontrol.cpp
+new file mode 100644
+index 0000000..1bf9c15
+--- /dev/null
++++ b/tests/test_bridgecontrol.cpp
+@@ -0,0 +1,225 @@
++// SPDX-FileCopyrightText: 2026 shreyasajj
++//
++// SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
++
++#include "bridgecontrol.h"
++#include "channelmodel.h"
++#include "epgstore.h"
++
++#include <QDateTime>
++#include <QJsonArray>
++#include <QJsonDocument>
++#include <QSignalSpy>
++#include <QTest>
++
++// Exercises the public protocol with an in-memory guide and a fake player.
++class BridgeControlTest : public QObject
++{
++    Q_OBJECT
++
++    EpgStore m_store;
++    ChannelModel m_channels{&m_store};
++    BridgeControl m_control{&m_channels};
++    int m_serial = 0;
++
++    QJsonObject request(const QString &command, QJsonObject fields = {})
++    {
++        fields.insert(QStringLiteral("id"), QString::number(++m_serial));
++        fields.insert(QStringLiteral("command"), command);
++
++        return QJsonDocument::fromJson(
++                   m_control.Execute(QString::fromUtf8(QJsonDocument(fields).toJson())).toUtf8())
++            .object();
++    }
++
++private Q_SLOTS:
++    void init()
++    {
++        m_store.clear();
++        m_channels.setChannels({});
++        m_control.setReady(true);
++        m_control.publish({}, QStringLiteral("idle"));
++    }
++
++    void excludesSecretsAndAmbiguity()
++    {
++        m_channels.setChannels({
++            {.uuid = QStringLiteral("source:tvh-uuid"),
++             .name = QStringLiteral("News"),
++             .icon = QStringLiteral("https://user:password@host/secret/logo")},
++            {.uuid = QStringLiteral("source:duplicate#2"),
++             .name = QStringLiteral("Ambiguous"),
++             .stream = QStringLiteral("https://provider/password/stream")},
++            {.uuid = QStringLiteral("source:legacy"),
++             .name = QStringLiteral("Sports"),
++             .stream = QStringLiteral("https://host/secret"),
++             .controlId = QStringLiteral("source:m3u-stable")},
++        });
++        const auto response = request(QStringLiteral("list_channels"));
++        const QByteArray serialized = QJsonDocument(response).toJson();
++        const auto items = response.value(QStringLiteral("result"))
++                               .toObject()
++                               .value(QStringLiteral("items"))
++                               .toArray();
++        QCOMPARE(items.size(), 2);
++        QVERIFY(!serialized.contains("password"));
++        QVERIFY(!serialized.contains("secret"));
++        QVERIFY(!serialized.contains("legacy"));
++        QVERIFY(!serialized.contains("tvh-uuid"));
++        QVERIFY(!serialized.contains("Ambiguous"));
++        QVERIFY(items.at(0)
++                    .toObject()
++                    .value(QStringLiteral("id"))
++                    .toString()
++                    .startsWith(QLatin1String("channel-")));
++    }
++
++    void selectionAndReplay()
++    {
++        const Channel entry{.uuid = QStringLiteral("s:tvh"), .name = QStringLiteral("News")};
++        m_channels.setChannels({entry});
++        QSignalSpy spy(&m_control, &BridgeControl::requested);
++        const auto connection = connect(&m_control,
++                                        &BridgeControl::requested,
++                                        this,
++                                        [this](const QString &, const QString &uuid) {
++                                            m_control.publish(uuid, QStringLiteral("buffering"));
++                                            m_control.acknowledge(true);
++                                        });
++        const QString payload = QString::fromUtf8(
++            QJsonDocument(
++                QJsonObject{{QStringLiteral("id"), QStringLiteral("replay")},
++                            {QStringLiteral("command"), QStringLiteral("select_channel")},
++                            {QStringLiteral("channel_id"), BridgeControl::channelId(entry)}})
++                .toJson());
++        const QString first = m_control.Execute(payload);
++        QVERIFY(
++            QJsonDocument::fromJson(first.toUtf8()).object().value(QStringLiteral("ok")).toBool());
++        QCOMPARE(m_control.Execute(payload), first);
++        QCOMPARE(spy.size(), 1);
++        QCOMPARE(spy.at(0).at(1).toString(), entry.uuid);
++        const auto unknown = request(QStringLiteral("select_channel"),
++                                     {{QStringLiteral("channel_id"), QStringLiteral("unknown")}});
++        QVERIFY(!unknown.value(QStringLiteral("ok")).toBool());
++        QCOMPARE(spy.size(), 1);
++        disconnect(connection);
++    }
++
++    void preservesFocusStateAndNegotiatesFeatures()
++    {
++        QSignalSpy focus(&m_control, &BridgeControl::focusRequested);
++        m_control.publish(QStringLiteral("s:current"), QStringLiteral("playing"));
++        QVERIFY(request(QStringLiteral("focus")).value(QStringLiteral("ok")).toBool());
++        QCOMPARE(focus.size(), 1);
++        auto state =
++            request(QStringLiteral("get_state")).value(QStringLiteral("result")).toObject();
++        QCOMPARE(state.value(QStringLiteral("media"))
++                     .toObject()
++                     .value(QStringLiteral("state"))
++                     .toString(),
++                 QStringLiteral("playing"));
++        QCOMPARE(state.value(QStringLiteral("capabilities")).toArray(),
++                 QJsonArray({QStringLiteral("stop"), QStringLiteral("pause")}));
++        QVERIFY(!request(QStringLiteral("seek")).value(QStringLiteral("ok")).toBool());
++        QVERIFY(!request(QStringLiteral("pause")).value(QStringLiteral("ok")).toBool());
++        m_control.setReady(false);
++        QVERIFY(!request(QStringLiteral("list_channels")).value(QStringLiteral("ok")).toBool());
++    }
++
++    void guideAndPagination()
++    {
++        const qint64 now = QDateTime::currentSecsSinceEpoch();
++        m_store.setEvents({
++            {.id = 1,
++             .channel = QStringLiteral("s:a"),
++             .start = now - 60,
++             .stop = now + 60,
++             .title = QStringLiteral("Current")},
++            {.id = 2,
++             .channel = QStringLiteral("s:a"),
++             .start = now + 60,
++             .stop = now + 120,
++             .title = QStringLiteral("Next")},
++        });
++        m_channels.setChannels({{.uuid = QStringLiteral("s:a"), .name = QStringLiteral("A")},
++                                {.uuid = QStringLiteral("s:b"), .name = QStringLiteral("B")}});
++        const auto result = request(QStringLiteral("list_channels"), {{QStringLiteral("limit"), 1}})
++                                .value(QStringLiteral("result"))
++                                .toObject();
++        QCOMPARE(result.value(QStringLiteral("next_offset")).toInt(), 1);
++        QCOMPARE(result.value(QStringLiteral("total")).toInt(), 2);
++        const auto item = result.value(QStringLiteral("items")).toArray().at(0).toObject();
++        QCOMPARE(item.value(QStringLiteral("current"))
++                     .toObject()
++                     .value(QStringLiteral("title"))
++                     .toString(),
++                 QStringLiteral("Current"));
++        QCOMPARE(
++            item.value(QStringLiteral("next")).toObject().value(QStringLiteral("stop")).toDouble(),
++            static_cast<double>(now + 120));
++        const auto last = request(QStringLiteral("list_channels"), {{QStringLiteral("offset"), 1}})
++                              .value(QStringLiteral("result"))
++                              .toObject();
++        QVERIFY(last.value(QStringLiteral("next_offset")).isNull());
++        QCOMPARE(last.value(QStringLiteral("items")).toArray().size(), 1);
++    }
++
++    void retriesSelectionAfterCatalogueReadiness()
++    {
++        const Channel entry{.uuid = QStringLiteral("s:cold"),
++                            .name = QStringLiteral("Cold launch")};
++        const QString payload = QString::fromUtf8(
++            QJsonDocument(
++                QJsonObject{{QStringLiteral("id"), QStringLiteral("cold-selection")},
++                            {QStringLiteral("command"), QStringLiteral("select_channel")},
++                            {QStringLiteral("channel_id"), BridgeControl::channelId(entry)}})
++                .toJson());
++        m_control.publish({}, QStringLiteral("idle"), true);
++        const auto pending = QJsonDocument::fromJson(m_control.Execute(payload).toUtf8()).object();
++        QCOMPARE(pending.value(QStringLiteral("error"))
++                     .toObject()
++                     .value(QStringLiteral("code"))
++                     .toString(),
++                 QStringLiteral("not_ready"));
++        m_channels.setChannels({entry});
++        m_control.publish({}, QStringLiteral("idle"), false);
++        const auto connection = connect(&m_control,
++                                        &BridgeControl::requested,
++                                        this,
++                                        [this](const QString &, const QString &) {
++                                            m_control.acknowledge(true);
++                                        });
++        QVERIFY(QJsonDocument::fromJson(m_control.Execute(payload).toUtf8())
++                    .object()
++                    .value(QStringLiteral("ok"))
++                    .toBool());
++        disconnect(connection);
++    }
++
++    void rejectsMalformedRequests()
++    {
++        for (const QString &payload : {QStringLiteral("[]"),
++                                       QStringLiteral("{}"),
++                                       QStringLiteral("not-json"),
++                                       QString(20000, QLatin1Char('x'))}) {
++            QVERIFY(!QJsonDocument::fromJson(m_control.Execute(payload).toUtf8())
++                         .object()
++                         .value(QStringLiteral("ok"))
++                         .toBool());
++        }
++
++        for (const QJsonObject &fields :
++             {QJsonObject{{QStringLiteral("limit"), true}},
++              QJsonObject{{QStringLiteral("offset"), -1}},
++              QJsonObject{{QStringLiteral("limit"), 51}},
++              QJsonObject{{QStringLiteral("offset"), 0.5}},
++              QJsonObject{{QStringLiteral("url"), QStringLiteral("https://example.org")}}}) {
++            QVERIFY(!request(QStringLiteral("list_channels"), fields)
++                         .value(QStringLiteral("ok"))
++                         .toBool());
++        }
++    }
++};
++
++QTEST_GUILESS_MAIN(BridgeControlTest)
++#include "test_bridgecontrol.moc"
+diff --git a/tests/test_channelid.cpp b/tests/test_channelid.cpp
+index d3f6e5e..7c5c302 100644
+--- a/tests/test_channelid.cpp
++++ b/tests/test_channelid.cpp
+@@ -67,9 +67,11 @@ private Q_SLOTS:
+         QCOMPARE(ChannelId::ownEventOf(events.first().id), 9);
+         QCOMPARE(ChannelId::sourceIndexOf(events.first().id), 2);
+ 
+-        const QVector<Channel> channels =
+-            ChannelId::prefixed(QStringLiteral("s"), {channel(QStringLiteral("a"), 1)});
++        Channel original = channel(QStringLiteral("a"), 1);
++        original.controlId = QStringLiteral("stable");
++        const QVector<Channel> channels = ChannelId::prefixed(QStringLiteral("s"), {original});
+         QCOMPARE(channels.first().uuid, QStringLiteral("s:a"));
++        QCOMPARE(channels.first().controlId, QStringLiteral("s:stable"));
+     }
+ 
+     void oneSourceStaysAsItIs()
+diff --git a/tests/test_channelidentity.cpp b/tests/test_channelidentity.cpp
+new file mode 100644
+index 0000000..9e1d8f7
+--- /dev/null
++++ b/tests/test_channelidentity.cpp
+@@ -0,0 +1,54 @@
++// SPDX-FileCopyrightText: 2026 shreyasajj
++//
++// SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
++
++#include "channelidentity.h"
++
++#include <QTest>
++
++// Exercises automation identities without fetching provider playlists.
++class ChannelIdentityTest : public QObject
++{
++    Q_OBJECT
++
++private Q_SLOTS:
++    static void reorderAndRename()
++    {
++        const auto first =
++            ChannelIdentity::forPlaylist({QStringLiteral("a"), QStringLiteral("b")},
++                                         {QStringLiteral("News"), QStringLiteral("Sports")});
++        const auto second = ChannelIdentity::forPlaylist(
++            {QStringLiteral("b"), QStringLiteral("a")},
++            {QStringLiteral("New sports name"), QStringLiteral("News")});
++        QCOMPARE(first.at(0), second.at(1));
++        QCOMPARE(first.at(1), second.at(0));
++        QVERIFY(first.at(0) != first.at(1));
++    }
++
++    static void duplicateIdsUseNames()
++    {
++        const auto first =
++            ChannelIdentity::forPlaylist({QStringLiteral("a"), QStringLiteral("a")},
++                                         {QStringLiteral("News"), QStringLiteral("Sports")});
++        const auto second =
++            ChannelIdentity::forPlaylist({QStringLiteral("a"), QStringLiteral("a")},
++                                         {QStringLiteral("Sports"), QStringLiteral("News")});
++        QCOMPARE(first.at(0), second.at(1));
++        QCOMPARE(first.at(1), second.at(0));
++    }
++
++    static void ambiguousAndUnnamedAreRejected()
++    {
++        const auto ids = ChannelIdentity::forPlaylist(
++            {QString(), QString(), QString(), QString()},
++            {QStringLiteral("News"), QStringLiteral("News"), QString(), QStringLiteral("Sports")});
++        QVERIFY(ids.at(0).isEmpty());
++        QVERIFY(ids.at(1).isEmpty());
++        QVERIFY(ids.at(2).isEmpty());
++        QVERIFY(!ids.at(3).isEmpty());
++        QVERIFY(ChannelIdentity::forPlaylist({QStringLiteral("a")}, {}).isEmpty());
++    }
++};
++
++QTEST_GUILESS_MAIN(ChannelIdentityTest)
++#include "test_channelidentity.moc"
+diff --git a/tests/test_epgdatabase.cpp b/tests/test_epgdatabase.cpp
+index 53f0f52..818d1f1 100644
+--- a/tests/test_epgdatabase.cpp
++++ b/tests/test_epgdatabase.cpp
+@@ -22,6 +22,7 @@ Channel channel(const QString &uuid, int number, const QString &stream = {})
+     result.number = number;
+     result.name = uuid.toUpper();
+     result.stream = stream;
++    result.controlId = QStringLiteral("control:") + uuid;
+ 
+     return result;
+ }
+@@ -93,6 +94,7 @@ private Q_SLOTS:
+         QCOMPARE(loaded.at(0).uuid, QStringLiteral("s1:b"));
+         QCOMPARE(loaded.at(1).name, QStringLiteral("S1:A"));
+         QCOMPARE(loaded.at(1).stream, QStringLiteral("http://a/1"));
++        QCOMPARE(loaded.at(1).controlId, QStringLiteral("control:s1:a"));
+ 
+         database.saveChannels(QStringLiteral("s1"), {channel(QStringLiteral("s1:c"), 3)});
+         QCOMPARE(database.loadChannels().size(), 1);
+diff --git a/tests/test_m3u.cpp b/tests/test_m3u.cpp
+index 847c9c8..27c695e 100644
+--- a/tests/test_m3u.cpp
++++ b/tests/test_m3u.cpp
+@@ -16,6 +16,28 @@ class M3uTest : public QObject
+     Q_OBJECT
+ 
+ private Q_SLOTS:
++    static void stableControlIdsKeepLegacyGuideKeys()
++    {
++        const auto first = M3u::parse(
++            "#EXTM3U\n#EXTINF:-1 tvg-id=\"same\",News\nhttp://host/old-token/1\n"
++            "#EXTINF:-1 tvg-id=\"same\",Sports\nhttp://host/old-token/2\n",
++            s_source);
++        const auto reordered = M3u::parse(
++            "#EXTM3U\n#EXTINF:-1 tvg-id=\"same\",Sports\nhttp://host/new-token/2\n"
++            "#EXTINF:-1 tvg-id=\"same\",News\nhttp://host/new-token/1\n",
++            s_source);
++        QCOMPARE(first.channels.at(0).uuid, QStringLiteral("same"));
++        QCOMPARE(first.channels.at(1).uuid, QStringLiteral("same#2"));
++        QVERIFY(!first.channels.at(0).controlId.isEmpty());
++        QCOMPARE(first.channels.at(0).controlId, reordered.channels.at(1).controlId);
++        QCOMPARE(first.channels.at(1).controlId, reordered.channels.at(0).controlId);
++        const auto ambiguous =
++            M3u::parse("#EXTM3U\n#EXTINF:-1,News\nhttp://a/1\n#EXTINF:-1,News\nhttp://a/2\n",
++                       s_source);
++        QVERIFY(ambiguous.channels.at(0).controlId.isEmpty());
++        QVERIFY(ambiguous.channels.at(1).controlId.isEmpty());
++    }
++
+     static void looksLikePlaylist()
+     {
+         QVERIFY(M3u::looksLikePlaylist("#EXTM3U\n"));
+-- 
+2.54.0 (Apple Git-157)
+
