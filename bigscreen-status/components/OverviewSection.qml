@@ -91,7 +91,8 @@ Card {
             readonly property int n: root.ws.clients || 0
             label: "Home Assistant"
             value: n === 0 ? "Disconnected" : n + (n === 1 ? " client" : " clients")
-            detail: n === 0 ? "left " + Ui.ago(root.ws.last_disconnected_at)
+            detail: n === 0 ? (root.ws.last_disconnected_at ? "left " + Ui.ago(root.ws.last_disconnected_at)
+                                                            : "no client since the bridge started")
                             : "for " + Ui.span(Ui.seconds(root.ws.last_connected_at))
             tone: n === 0 ? root.bad : root.good
         }
