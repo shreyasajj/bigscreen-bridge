@@ -114,7 +114,7 @@ Where the built bridge differs from the mock's proposal:
 | Field or line | What changed, and why |
 | --- | --- |
 | `hooks.*.mode` | `"polled"` when `Hook.polled` (never announced, or VacuumTube not ready), not `pushed and not stale`. `stale` is also true for the moment between a signal and the re-read it causes, which would have flashed every signalling hook to "polled". |
-| `hooks.*.poll_reason` | `not_running` when the endpoint does not answer and no window matches; `never_signalled` when it answers but never signalled; `not_ready` otherwise (VacuumTube before Leanback is ready, or a socket that stopped answering). |
+| `hooks.*.poll_reason` | `not_running` when the endpoint does not answer and no window matches; `not_ready` when it does not answer although a window matches, or (VacuumTube) before Leanback is ready; `never_signalled` when it answers but has never signalled. |
 | `hooks.*.consecutive_failures` | A closed app fails every 2 s poll, so this counts into the thousands. The screen hides it when `poll_reason` is `not_running`. |
 | `hooks.*.signals_received` | Counts only signals from the app (or its MPRIS player). VacuumTube's settle re-read after an MPRIS change is the bridge's own and is not counted. |
 | `hooks.*.last_error.message` | The bridge's own message. When the app itself reported the error, its text is replaced by "`<App>` reported an error" and its code is kept only if it is a plain identifier. |

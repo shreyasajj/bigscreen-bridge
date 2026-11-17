@@ -353,7 +353,9 @@ class Recorder:
         window = any(app.matches(w) for w in getattr(bridge.wm, "windows", []))
         reason = None
         if polled:
+            # An endpoint that does not answer while the app has a window is a fault, not silence.
             reason = ("not_running" if not reachable and not window
+                      else "not_ready" if not reachable
                       else "never_signalled" if not hook.pushed else "not_ready")
         entry = {"transport": transport, "endpoint": where, "enabled": bool(hook.enabled), "reachable": reachable,
                  "ready": bool(hook.is_ready()), "mode": "polled" if polled else "pushed", "poll_reason": reason,

@@ -421,7 +421,7 @@
     ],
     "warnings": [
       {
-        "at": "2026-11-17T17:21:15.973Z",
+        "at": "2026-11-17T18:46:01.865Z",
         "level": "WARNING",
         "logger": "bigscreen_bridge.diagnostics",
         "message": "VacuumTube control socket unavailable (not_ready)",

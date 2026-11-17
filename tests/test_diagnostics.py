@@ -206,9 +206,10 @@ async def test_hook_reads_signals_and_failures(bridge, recorder, clock):
     hook.request = AsyncMock(return_value=STREMIO_STATE)
     await hook.refresh()
     assert recorder.to_dict(b)["hooks"]["stremio"]["consecutive_failures"] == 0
-    b.wm.windows = []
     hook.pushed, hook.request = False, AsyncMock(side_effect=BridgeError("not_ready", "x"))
     await hook.refresh()
+    assert recorder.to_dict(b)["hooks"]["stremio"]["poll_reason"] == "not_ready"   # window, no endpoint
+    b.wm.windows = []
     assert recorder.to_dict(b)["hooks"]["stremio"]["poll_reason"] == "not_running"
 
 

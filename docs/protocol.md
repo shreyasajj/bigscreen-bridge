@@ -255,8 +255,8 @@ log line. Times are UTC ISO 8601 with milliseconds and `Z`; compute ages against
 - `mqtt.last_error` is the exception class name; `failures` counts attempts since
   the last successful connection.
 - `poll_reason` (only while `mode` is `polled`): `not_running` (no endpoint, no
-  window), `never_signalled`, or `not_ready` (VacuumTube is polled until Leanback
-  is ready). `signal_source` is `StateChanged` or `mpris`.
+  window), `not_ready` (a window but no answering endpoint, or VacuumTube before
+  Leanback is ready), or `never_signalled` (answers, but never signalled). `signal_source` is `StateChanged` or `mpris`.
 - Couchside adds `music_assistant_ready`; Flimmer adds `catalogue_loading`,
   `catalogue_loading_since` and `channels` (the last `list_channels` total, `null`
   until a page was listed).

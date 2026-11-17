@@ -448,7 +448,7 @@
     ],
     "warnings": [
       {
-        "at": "2026-11-17T17:21:15.653Z",
+        "at": "2026-11-17T18:46:01.545Z",
         "level": "INFO",
         "logger": "bigscreen_bridge.diagnostics",
         "message": "Stremio has not emitted StateChanged; polling every 2 s",

@@ -511,7 +511,7 @@
     ],
     "warnings": [
       {
-        "at": "2026-11-17T17:21:16.418Z",
+        "at": "2026-11-17T18:46:02.318Z",
         "level": "WARNING",
         "logger": "bigscreen_bridge.diagnostics",
         "message": "5 failed commands from one websocket client in 15 s",
