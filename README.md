@@ -34,8 +34,11 @@ Music Assistant remains the music playback controller.
 
 State is pushed, not polled: patched Couchside, Stremio and Flimmer emit a
 `StateChanged` signal and MPRIS players emit their own, so the bridge re-reads only
-what changed. VacuumTube's socket has no notifications and is still read every 2
-seconds; display, logind and PipeWire state are read every 10 seconds. Clients are
+what changed. VacuumTube's socket has no notifications, so the bridge follows the
+MPRIS player Chromium already publishes for it: a signal from that player triggers a
+socket read, which stays the source of the video ID and acknowledgements. Without that
+player (or before Leanback is ready) the socket is read every 2 seconds. Display,
+logind and PipeWire state are read every 10 seconds. Clients are
 sent a new snapshot only when something other than the playback clock changed.
 
 ## Install the KDE bridge
@@ -91,12 +94,20 @@ replaces an old monitor after an unexpected crash.
 
 ## Install the Home Assistant integration
 
-Copy the whole `custom_components/bigscreen_bridge` directory into your HA
-configuration directory, or extract `dist/bigscreen_bridge-0.1.0.zip` there. The
-result must be `/config/custom_components/bigscreen_bridge/manifest.json`.
-Restart HA after installing the custom integration. Then use **Settings → Devices
-& services → Add integration → Bigscreen Bridge**. Enter
-`http://192.168.30.153:8765` and the private token from the TV config. An expired
+With HACS: add `https://github.com/shreyasajj/ha-bigscreen-bridge` as a custom
+repository of type Integration and install **Bigscreen Bridge**. That repository is
+a published copy; this project stays the source. After changing the integration run
+`python3 scripts/export-hacs.py` (`--check` reports drift), then commit, tag and
+release there. HACS needs that repository to be public.
+
+Without HACS: copy the whole `custom_components/bigscreen_bridge` directory into your
+HA configuration directory, or extract the zip from `python3 scripts/package.py`
+there. The result must be `/config/custom_components/bigscreen_bridge/manifest.json`.
+Restart HA after installing the custom integration. A bridge on the same network
+segment is then offered under **Settings → Devices & services → Discovered**; only
+the private token from the TV config is asked for. Otherwise use **Add integration →
+Bigscreen Bridge** and enter the address, for example `http://tv.local:8765`, and
+the token. An expired
 or changed token can be updated through HA's reauthentication flow.
 
 Port 8765 is the bridge address, not Home Assistant's port.
@@ -105,9 +116,36 @@ The integration has only been run in a temporary Home Assistant started by
 
 Each bridge's stored UUID identifies its HA device independently of its IP address.
 Configure each TV separately. A changed UUID is treated as another device.
-Connection is manual. Not implemented: zeroconf discovery, the optional MQTT
-transport, and library browsing for Couchside, Stremio and YouTube (only Flimmer
-channels are browsable).
+
+Discovery: the bridge registers `_bigscreen-bridge._tcp` with the TV's Avahi daemon
+(device ID, name and protocol only; never the token) unless it listens on loopback
+or `"discovery": false` is set in its config. mDNS does not cross VLANs, so Home
+Assistant on another subnet needs the manual address or an mDNS reflector. A
+discovered TV that changes address is followed automatically.
+
+Media browsing lists Flimmer channels, the Music Assistant library through
+Couchside (playlists, albums, artists, tracks) and Stremio's stored library. The
+app has to be running. Opening a Couchside item navigates the UI; playback stays
+with Music Assistant. YouTube has no browsable library: Leanback offers no local
+catalogue to read, so only typed video, playlist and search links work there.
+
+### Optional MQTT transport
+
+Install with `pip install ".[mqtt]"` (the TV installer does) and add to
+`~/.config/bigscreen-bridge/config.json`:
+
+```json
+"mqtt": {"host": "broker.local", "port": 1883, "username": "", "password": "",
+         "tls": false, "base_topic": "bigscreen", "commands": false}
+```
+
+Under `bigscreen/<device_id>/` the bridge publishes retained `availability`
+(`online`/`offline`, also its last will) and retained `state` (the WebSocket
+snapshot). With `"commands": true` it accepts the same JSON requests on `command`
+and answers on `response` with the request ID. Anyone who may publish on the broker
+can then control the TV, so leave commands off unless the broker is access-controlled.
+This creates no Home Assistant entities and is independent of Stremio TV's own MQTT
+link, which is unchanged.
 
 ## Examples
 
@@ -134,7 +172,7 @@ Valid app IDs: `couchside`, `stremio`, `flimmer`, `vacuumtube`.
 See [automation examples](examples/automations.yaml).
 Typed deep links for every app are described in the sections below and in the
 [contract](docs/protocol.md). Existing Stremio MQTT configuration and messages are
-untouched; the bridge itself has no MQTT transport.
+untouched.
 
 ## Develop and test
 

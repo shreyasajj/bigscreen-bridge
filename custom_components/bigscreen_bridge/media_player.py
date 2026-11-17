@@ -13,6 +13,16 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 
 
+_BROWSE_ID = re.compile(r"(couchside|stremio|flimmer)(?:/([a-z_]{1,32}))?(?::([0-9]{1,7}))?")
+_MEDIA_CLASSES = {"channel": "channel", "movie": "movie", "series": "tv_show", "album": "album",
+                  "artist": "artist", "playlist": "playlist", "track": "track"}
+
+
+def _browsable(app):
+    """Bridges before the shared library contract only knew the Flimmer catalogue."""
+    return bool(app.get("browse", app.get("id") == "flimmer" and app.get("hook_installed", False)))
+
+
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = entry.runtime_data
     players = [BigscreenPlayer(coordinator)]
@@ -74,7 +84,7 @@ class BigscreenPlayer(CoordinatorEntity, MediaPlayerEntity):
     @property
     def supported_features(self):
         flags = (MediaPlayerEntityFeature.PLAY_MEDIA | MediaPlayerEntityFeature.TURN_ON) if self._app_id else self._attr_supported_features
-        if self._app_id == "flimmer":
+        if self._app_id == "flimmer" or (self._app_id and self._application.get("browse")):
             flags |= MediaPlayerEntityFeature.BROWSE_MEDIA
         for capability, source, feature in (
                 ("set_volume", self._audio, MediaPlayerEntityFeature.VOLUME_SET),
@@ -299,33 +309,46 @@ class BigscreenPlayer(CoordinatorEntity, MediaPlayerEntity):
         await self.coordinator.command("focus", app=app["id"])
 
     async def async_browse_media(self, media_content_type=None, media_content_id=None):
-        channel_page = re.fullmatch(r"flimmer(?::([0-9]{1,7}))?", media_content_id or "")
-        if channel_page or (self._app_id == "flimmer" and media_content_id in (None, "", "apps")):
-            if self._app_id not in (None, "flimmer"):
-                raise HomeAssistantError("Unsupported catalogue for this app player")
-            offset = int(channel_page[1] or 0) if channel_page else 0
-            result = await self.coordinator.command("browse", app="flimmer", offset=offset, limit=50)
-            if not result["items"] and result.get("loading"):
-                raise HomeAssistantError("Flimmer is loading its channel catalogue")
-            children = [BrowseMedia(title=item["name"], media_class="channel",
-                                    media_content_type="flimmer_channel", media_content_id=item["id"],
-                                    can_play=True, can_expand=False) for item in result["items"]]
-            if result.get("next_offset") is not None:
-                children.append(BrowseMedia(title="More channels", media_class="directory",
-                                            media_content_type="flimmer_channels",
-                                            media_content_id="flimmer:" + str(result["next_offset"]),
-                                            can_play=False, can_expand=True))
-            return BrowseMedia(title="Flimmer channels", media_class="directory",
-                               media_content_id="flimmer:" + str(offset), media_content_type="flimmer_channels",
-                               can_play=False, can_expand=True, children=children)
-        if media_content_id not in (None, "", "apps"):
+        apps = {a["id"]: a for a in self.coordinator.data["apps"]}
+        if media_content_id in (None, "", "apps") and self._app_id and (
+                self._app_id == "flimmer" or apps.get(self._app_id, {}).get("browse")):
+            media_content_id = self._app_id  # an app player opens straight into its own library
+        if media_content_id in (None, "", "apps"):
+            result = await self.coordinator.command("browse")
+            return BrowseMedia(title="Bigscreen apps", media_class="directory", media_content_id="apps",
+                               media_content_type=MediaType.APP, can_play=False, can_expand=True,
+                               children=[BrowseMedia(title=item["title"], media_class="app",
+                                                     media_content_type="app", media_content_id=item["id"],
+                                                     can_play=True, can_expand=_browsable(apps.get(item["id"], {})))
+                                         for item in result["items"]])
+        page = _BROWSE_ID.fullmatch(media_content_id)
+        if not page:
             raise HomeAssistantError("Unsupported media catalogue")
-        result = await self.coordinator.command("browse")
-        flimmer = next((a for a in self.coordinator.data["apps"] if a["id"] == "flimmer"), {})
-        return BrowseMedia(title="Bigscreen apps", media_class="directory", media_content_id="apps",
-                           media_content_type=MediaType.APP, can_play=False, can_expand=True,
-                           children=[BrowseMedia(title=item["title"], media_class="app",
-                                                 media_content_type="app", media_content_id=item["id"],
-                                                 can_play=True,
-                                                 can_expand=item["id"] == "flimmer" and flimmer.get("hook_installed", False))
-                                     for item in result["items"]])
+        app_id, path, offset = page[1], page[2], int(page[3] or 0)
+        if self._app_id not in (None, app_id):
+            raise HomeAssistantError("Unsupported catalogue for this app player")
+        result = await self.coordinator.command("browse", app=app_id, offset=offset, limit=50,
+                                                **({"path": path} if path else {}))
+        if not result["items"] and result.get("loading"):
+            raise HomeAssistantError("Flimmer is loading its channel catalogue")
+        channels = app_id == "flimmer"
+        section = "flimmer_channels" if channels else app_id + "_library"
+        here = app_id + ("/" + path if path else "")
+        children = []
+        for item in result["items"]:
+            if item.get("path"):
+                children.append(BrowseMedia(title=item["name"], media_class="directory", media_content_type=section,
+                                            media_content_id=f"{app_id}/{item['path']}", can_play=False, can_expand=True))
+                continue
+            kind = item.get("media_content_type") or "flimmer_channel"
+            children.append(BrowseMedia(title=item["name"], media_class=_MEDIA_CLASSES.get(kind.split("_", 1)[-1], "video"),
+                                        media_content_type=kind, media_content_id=item["id"],
+                                        can_play=True, can_expand=False))
+        if result.get("next_offset") is not None:
+            children.append(BrowseMedia(title="More channels" if channels else "More", media_class="directory",
+                                        media_content_type=section,
+                                        media_content_id=f"{here}:{result['next_offset']}",
+                                        can_play=False, can_expand=True))
+        title = "Flimmer channels" if channels else apps.get(app_id, {}).get("name", app_id) + " library"
+        return BrowseMedia(title=title, media_class="directory", media_content_id=f"{here}:{offset}",
+                           media_content_type=section, can_play=False, can_expand=True, children=children)

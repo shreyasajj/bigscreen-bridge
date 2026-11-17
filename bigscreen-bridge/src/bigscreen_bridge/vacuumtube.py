@@ -1,4 +1,9 @@
-"""Private Unix-socket control for the tested Electron/Leanback application hook."""
+"""Private Unix-socket control for the tested Electron/Leanback application hook.
+
+The socket is request/response only. Chromium already publishes the page's media
+session as an MPRIS player, so the bridge treats that player's signals as this
+hook's change notification and reads the authoritative state from the socket.
+"""
 import math
 import re
 
@@ -39,6 +44,12 @@ class VacuumTubeHook(SocketHook):
     kinds = KINDS
     socket_name = "vacuumtube.sock"
     timeouts = {"open": 25}
+    settle = 1.2    # the renderer republishes its state once a second
+
+    @property
+    def stale(self):
+        # MPRIS says nothing about Leanback readiness, so keep polling until it is ready.
+        return super().stale or not self.is_ready()
 
     def accept(self, state):
         state = super().accept(state)

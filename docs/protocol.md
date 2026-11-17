@@ -40,8 +40,20 @@ return explicit errors and declare only verified capabilities. Additional
 commands: play/pause/stop/seek/volume/next/previous only when supported. Position
 includes UTC observation timestamp; duration uses seconds, volume 0..1.
 Couchside declares MA ownership and does not create another playback controller.
-Optional MQTT is a separate transport/adapter; existing Stremio messages remain
+Optional MQTT (`mqtt.py`) mirrors this API: retained `availability` and `state`
+under `<base_topic>/<device_id>/`, and, only with `"commands": true`, the same JSON
+requests on `command` answered on `response`. Existing Stremio messages remain
 unchanged. No MQTT Discovery media player is introduced.
+
+Discovery: `_bigscreen-bridge._tcp` via Avahi with TXT `device_id`, `name`,
+`protocol=1`. The token is never announced.
+
+`browse` with `app` lists that app's library: `{"id","command":"browse","app",
+"path"?, "offset"?, "limit"?}` (`limit` 1-50, `path` a section name matching
+`[a-z_]{1,32}`). Each item has `id`, `name` and either `path` (a section to browse
+next) or `content_type` plus `media_content_type`, the typed ID to pass to `open`.
+`next_offset` is null on the last page. Apps list `"browse": true` in the snapshot
+when a library is available.
 
 Security: constant-time token check, >=32-character generated secret, bounded
 frames, bounded per-session result cache, no arbitrary launch arguments/URLs,
@@ -59,6 +71,17 @@ at least `protocol: 1`, `ready`, and `content_types`; apps with a player add `me
 and `capabilities`. In the bridge this is `hooks.py` (`Hook`, `DBusHook`,
 `SocketHook`); an app module adds only its identity, validation and navigation call,
 and `server.py` routes every app through one `ADAPTERS` table.
+
+A hook may offer a read-only library with `"browse": true` in its state and a
+`browse` command taking optional `path`, `offset` and `limit`, returning
+`{"items": [{"id", "name", "content_type" | null, "path" | null}], "next_offset"}`.
+The bridge rejects any page with an item it would not also agree to open. Couchside
+(Music Assistant library sections) and Stremio (stored library) implement it;
+Flimmer keeps its earlier `list_channels` command; VacuumTube has none.
+
+A hook without its own signal can be followed through the app's MPRIS player
+(`MprisRegistry.follow`): VacuumTube's Chromium player announces changes, and the
+socket is then read for the authoritative state.
 
 D-Bus hooks should emit a data-free `StateChanged` signal on their control interface
 whenever the state they publish really changes (not for ordinary playback progress).

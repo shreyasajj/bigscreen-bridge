@@ -3,7 +3,7 @@ import asyncio
 import re
 
 from .adapters import BridgeError
-from .hooks import DBusHook
+from .hooks import DBusHook, validate_page  # noqa: F401  (re-exported for callers)
 
 BUS_NAME = "io.github.jclsn.Flimmer.Control"
 OBJECT_PATH = "/io/github/jclsn/Flimmer/Control"
@@ -15,11 +15,6 @@ def validate_channel(value):
     if not isinstance(value, str) or not _ID.fullmatch(value):
         raise BridgeError("invalid_request", "Use a Flimmer channel ID from media browsing")
     return value
-
-
-def validate_page(offset=0, limit=50):
-    if type(offset) is not int or not 0 <= offset <= 1000000 or type(limit) is not int or not 1 <= limit <= 50:
-        raise BridgeError("invalid_request", "Invalid channel page bounds")
 
 
 class FlimmerHook(DBusHook):
@@ -54,6 +49,10 @@ class FlimmerHook(DBusHook):
             raise BridgeError("readiness_timeout", "Flimmer channel catalogue did not become ready") from exc
         await self.refresh()
         return result
+
+    @property
+    def browsable(self):
+        return self.enabled  # the channel catalogue is part of the hook itself
 
     async def browse(self, offset=0, limit=50):
         validate_page(offset, limit)

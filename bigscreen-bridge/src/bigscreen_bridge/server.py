@@ -23,12 +23,15 @@ from .power import PowerManager
 from .sessions import SessionController
 
 from .config import load_config
+from .discovery import advertise
+from .mqtt import MqttLink, settings as mqtt_settings
 from .deep_links import parse_uri
 from .adapters import APPS, BridgeError
 from .kwin import KWin
 from .couchside import CouchsideHook, KINDS, validate_content
 from .vacuumtube import VacuumTubeHook, validate_content as validate_youtube, validate_volume
-from .flimmer import FlimmerHook, validate_channel, validate_page
+from .flimmer import FlimmerHook, validate_channel
+from .hooks import validate_page
 from .stremio import StremioHook, validate_content as validate_stremio, validate_seek
 
 LOG = logging.getLogger(__name__)
@@ -132,6 +135,7 @@ class Bridge:
         self.launcher = launcher
         self.installed = set()
         self.clients = set()
+        self.publishers = []            # extra transports told about every state change
         self.lock = asyncio.Lock()
         self.launch_tasks = {}
         self.couchside = None
@@ -150,6 +154,7 @@ class Bridge:
         """Add what an application hook reports to its snapshot entry."""
         state = hook.state or {}
         app["content_types"] = adapter.content_types(hook)
+        app["browse"] = bool(hook.enabled and getattr(hook, "browsable", False))
         if adapter.owner:
             app["playback_owner"] = adapter.owner
             if state:
@@ -199,6 +204,11 @@ class Bridge:
     async def notify(self):
         if self.clients:
             await asyncio.gather(*(self.send(c, self.snapshot()) for c in list(self.clients)))
+        for publish in list(self.publishers):
+            try:
+                await publish()
+            except Exception as exc:  # a secondary transport must not block WebSocket clients
+                LOG.warning("State publisher failed: %s", type(exc).__name__)
 
     async def send(self, client, data):
         try:
@@ -342,7 +352,7 @@ class Bridge:
         if command == "open_uri":
             allowed = {"id", "command", "uri", "app"}
         if command == "browse":
-            allowed = {"id", "command", "app", "offset", "limit"}
+            allowed = {"id", "command", "app", "path", "offset", "limit"}
         if command == "open":
             allowed = {"id", "command", "app", "content_type", "content_id", "resume"}
         if command in ("play", "pause", "stop", "seek", "volume_set", "volume_mute"):
@@ -363,16 +373,64 @@ class Bridge:
             return await self.focus(request.get("app"))
         if command == "browse":
             if "app" in request:
-                if request["app"] != "flimmer" or not self.flimmer or not self.flimmer.enabled:
-                    raise BridgeError("unsupported", "No channel catalogue for this application")
-                offset, limit = request.get("offset", 0), request.get("limit", 50)
-                validate_page(offset, limit)
-                return await self.flimmer.browse(offset, limit)
-            if "offset" in request or "limit" in request:
+                adapter, hook = ADAPTERS.get(request["app"]), self.hook(request["app"])
+                if not adapter or not hook:
+                    raise BridgeError("unsupported", "No library for this application")
+                path, offset, limit = request.get("path"), request.get("offset", 0), request.get("limit", 50)
+                validate_page(offset, limit, path)
+                if adapter.app == "flimmer":
+                    if path is not None:
+                        raise BridgeError("invalid_request", "The channel catalogue has no sections")
+                    result = await hook.browse(offset, limit)
+                    kinds = ["channel"] * len(result["items"])
+                else:
+                    result = await hook.browse(path, offset, limit)
+                    kinds = [item["content_type"] for item in result["items"]]
+                for item, kind in zip(result["items"], kinds):
+                    # The typed ID a client passes straight back to `open`.
+                    item["media_content_type"] = adapter.prefix + kind if kind else None
+                return result
+            if "offset" in request or "limit" in request or "path" in request:
                 raise BridgeError("invalid_request", "Pagination requires an application catalogue")
             return {"items": [{"id": a.id, "title": a.name, "media_content_type": "app"}
                               for a in APPS if a.flatpak in self.installed]}
         return self.snapshot()
+
+    async def handle(self, payload, cache):
+        """Run one JSON request from any transport and return its acknowledgement.
+
+        `cache` is the caller's per-connection memory that makes retries idempotent.
+        """
+        request_id = None
+        data = None
+        try:
+            data = json.loads(payload)
+            if not isinstance(data, dict):
+                raise BridgeError("invalid_request", "Expected an object")
+            request_id = data.get("id")
+            if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+                request_id = None
+                raise BridgeError("invalid_request", "A request ID is required")
+            if request_id in cache:
+                original, response = cache[request_id]
+                if data != original:
+                    raise BridgeError("invalid_request", "Request ID reused with different data")
+                return response
+            result = await self.execute(data)
+            response = {"type": "result", "id": request_id, "ok": True, "result": result}
+        except (json.JSONDecodeError, BridgeError) as exc:
+            response = {"type": "result", "id": request_id, "ok": False,
+                        "error": {"code": getattr(exc, "code", "invalid_request"),
+                                  "message": str(exc)}}
+        except Exception:
+            LOG.exception("Request failed")
+            response = {"type": "result", "id": request_id, "ok": False,
+                        "error": {"code": "internal_error", "message": "Bridge operation failed"}}
+        if request_id and request_id not in cache:
+            cache[request_id] = (data, response)
+            if len(cache) > 128:
+                cache.popitem(last=False)
+        return response
 
     async def websocket(self, request):
         supplied = request.headers.get("Authorization", "")
@@ -388,36 +446,7 @@ class Bridge:
             async for msg in ws:
                 if msg.type != web.WSMsgType.TEXT:
                     break
-                request_id = None
-                try:
-                    data = json.loads(msg.data)
-                    if not isinstance(data, dict):
-                        raise BridgeError("invalid_request", "Expected an object")
-                    request_id = data.get("id")
-                    if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
-                        request_id = None
-                        raise BridgeError("invalid_request", "A request ID is required")
-                    if request_id in cache:
-                        original, response = cache[request_id]
-                        if data != original:
-                            raise BridgeError("invalid_request", "Request ID reused with different data")
-                        await self.send(ws, response)
-                        continue
-                    result = await self.execute(data)
-                    response = {"type": "result", "id": request_id, "ok": True, "result": result}
-                except (json.JSONDecodeError, BridgeError) as exc:
-                    response = {"type": "result", "id": request_id, "ok": False,
-                                "error": {"code": getattr(exc, "code", "invalid_request"),
-                                          "message": str(exc)}}
-                except Exception:
-                    LOG.exception("Request failed")
-                    response = {"type": "result", "id": request_id, "ok": False,
-                                "error": {"code": "internal_error", "message": "Bridge operation failed"}}
-                if request_id and request_id not in cache:
-                    cache[request_id] = (data, response)
-                    if len(cache) > 128:
-                        cache.popitem(last=False)
-                await self.send(ws, response)
+                await self.send(ws, await self.handle(msg.data, cache))
         finally:
             self.clients.discard(ws)
         return ws
@@ -436,6 +465,8 @@ def application(bridge):
 
 async def serve(config_path):
     config = load_config(config_path)
+    mqtt_options = mqtt_settings(config)
+    mqtt_link = None
     monitor = Path(config["monitor_path"])
     wm = KWin(monitor)
     bridge = Bridge(config, wm)
@@ -474,6 +505,7 @@ async def serve(config_path):
         # safety net, plus the sole source for hooks that never announce anything.
         wake = asyncio.Event()
         mpris.on_change = wake.set
+        mpris.follow("vacuumtube", bridge.vacuumtube)
         for hook in hooks:
             hook.on_change = wake.set
             await hook.subscribe()
@@ -484,6 +516,7 @@ async def serve(config_path):
             while True:
                 now = loop.time()
                 slow = now >= slow_at
+                wake.clear()  # anything announced from here on triggers another pass
                 previous = significant(bridge.snapshot())
                 jobs = [bridge.sessions.observe(full=slow)]
                 if slow or bridge.couchside.stale:
@@ -497,7 +530,6 @@ async def serve(config_path):
                     LOG.warning("State refresh failed: %r", failure)
                 if previous != significant(bridge.snapshot()):
                     await bridge.notify()
-                wake.clear()
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(wake.wait(), FAST_POLL)
                 await asyncio.sleep(0.05)  # coalesce bursts of notifications
@@ -508,6 +540,9 @@ async def serve(config_path):
         await runner.setup()
         site = web.TCPSite(runner, config.get("host", "127.0.0.1"), config.get("port", 8765))
         await site.start()
+        await advertise(system_bus, config, socket.gethostname())
+        if mqtt_options:
+            mqtt_link = asyncio.create_task(MqttLink(bridge, mqtt_options).run())
         lost = asyncio.create_task(wm.lost.wait())
         disconnected = asyncio.create_task(wm.bus.wait_for_disconnect())
         shutdown = asyncio.create_task(stopping.wait())
@@ -520,10 +555,11 @@ async def serve(config_path):
                 task.cancel()
             await asyncio.gather(lost, disconnected, shutdown, return_exceptions=True)
     finally:
-        if hook_poll:
-            hook_poll.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await hook_poll
+        for task in (hook_poll, mqtt_link):
+            if task:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
         if runner:
             for client in list(bridge.clients):
                 await client.close(code=1001, message=b"Bridge stopping")

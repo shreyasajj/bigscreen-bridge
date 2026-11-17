@@ -10,12 +10,23 @@ import contextlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import uuid
 
 from dbus_next import Message, MessageType
 
 from .adapters import BridgeError
+
+
+BROWSE_PATH = re.compile(r"[a-z_]{1,32}")
+
+
+def validate_page(offset=0, limit=50, path=None):
+    if type(offset) is not int or not 0 <= offset <= 1000000 or type(limit) is not int or not 1 <= limit <= 50:
+        raise BridgeError("invalid_request", "Invalid page bounds")
+    if path is not None and (not isinstance(path, str) or not BROWSE_PATH.fullmatch(path)):
+        raise BridgeError("invalid_request", "Invalid library section")
 
 
 class Hook:
@@ -101,6 +112,47 @@ class Hook:
                     await self.refresh()
         except TimeoutError as exc:
             raise BridgeError("readiness_timeout", message or f"{self.label} did not become ready") from exc
+
+    @property
+    def browsable(self):
+        """Whether the running app offers a library listing."""
+        return bool(self.state and self.state.get("browse") is True)
+
+    def check_item(self, kind, value):
+        """Raise unless a listed item is something this hook would also agree to open."""
+
+    async def browse(self, path=None, offset=0, limit=50):
+        """One page of the app's library: openable items and sections to descend into."""
+        validate_page(offset, limit, path)
+        await self.refresh()
+        if not self.is_ready():
+            raise BridgeError("not_ready", f"Open {self.label} to browse its library")
+        if not self.browsable:
+            raise BridgeError("unsupported", f"The running {self.label} does not offer a library")
+        arguments = {"offset": offset, "limit": limit, **({"path": path} if path else {})}
+        result = await self.request("browse", **arguments)
+        try:
+            if not isinstance(result["items"], list) or len(result["items"]) > 50:
+                raise ValueError("Invalid page")
+            items = []
+            for item in result["items"]:
+                kind, section = item.get("content_type"), item.get("path")
+                if (not isinstance(item["id"], str) or not 1 <= len(item["id"]) <= 2048
+                        or not isinstance(item["name"], str) or (kind is None) == (section is None)):
+                    raise ValueError("Invalid item")
+                if kind is None:
+                    validate_page(path=section)
+                elif kind not in self.kinds:
+                    raise ValueError("Unknown content type")
+                else:
+                    self.check_item(kind, item["id"])
+                items.append({"id": item["id"], "name": item["name"][:512], "content_type": kind, "path": section})
+            next_offset = result.get("next_offset")
+            if next_offset is not None and (type(next_offset) is not int or not offset < next_offset <= 1000000):
+                raise ValueError("Invalid page continuation")
+        except (KeyError, TypeError, ValueError, AttributeError, BridgeError) as exc:
+            raise BridgeError("invalid_response", f"Invalid {self.label} library page") from exc
+        return {"items": items, "next_offset": next_offset}
 
     async def control(self, request_id, command, **kwargs):
         await self.refresh()

@@ -154,3 +154,42 @@ def test_position_ticks_are_not_state_changes():
     original = snap(10, "2026-11-16T12:00:10Z")
     significant(original)
     assert original["apps"][0]["media"]["updated_at"]                           # input untouched
+
+
+async def test_vacuumtube_follows_its_chromium_mpris_player():
+    from bigscreen_bridge import mpris as mpris_module
+    from bigscreen_bridge.mpris import PATH, PLAYER, MprisRegistry
+    from bigscreen_bridge.vacuumtube import VacuumTubeHook
+
+    hook = VacuumTubeHook(True, "/nonexistent/vacuumtube.sock")
+    hook.on_change = Mock()
+    registry = MprisRegistry(None)
+    registry.follow("vacuumtube", hook)
+    record = {"id": "mpris::1.9", "owner": ":1.9", "app": "vacuumtube", "state": "playing", "available": True}
+    registry._read = AsyncMock(return_value=record)
+    original, mpris_module.call = mpris_module.call, AsyncMock(return_value=[["org.mpris.MediaPlayer2.chromium.instance3"]])
+    try:
+        await registry.refresh()
+        assert hook.pushed and hook.dirty  # the player appeared: re-read, then stop polling
+        hook.state, hook.dirty = {"ready": True}, False
+        assert not hook.stale
+        for interface, member, body in (("org.freedesktop.DBus.Properties", "PropertiesChanged", [PLAYER, {}, []]),
+                                        (PLAYER, "Seeked", [5000000])):
+            hook.dirty = False
+            registry._signal(signal(sender=":1.9", path=PATH, interface=interface, member=member, body=body))
+            assert hook.stale
+        hook.dirty, hook.settle = False, 0.01
+        registry._signal(signal(sender=":1.9", path=PATH, interface=PLAYER, member="Seeked", body=[1]))
+        hook.dirty = False
+        await asyncio.sleep(0.05)
+        assert hook.stale  # read again once the renderer has republished its state
+        hook.dirty = False
+        registry._signal(signal(sender=":1.77", path=PATH, interface=PLAYER, member="Seeked", body=[1]))
+        assert not hook.stale  # another application's player is not ours
+        hook.state = {"ready": False}
+        assert hook.stale  # MPRIS cannot say when Leanback becomes ready
+        mpris_module.call = AsyncMock(return_value=[[]])
+        await registry.refresh()
+        assert not hook.pushed and hook.stale  # player gone: back to polling
+    finally:
+        mpris_module.call = original

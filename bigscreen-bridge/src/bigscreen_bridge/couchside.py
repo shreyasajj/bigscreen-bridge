@@ -31,7 +31,7 @@ class CouchsideHook(DBusHook):
     bus_name = BUS_NAME
     object_path = OBJECT_PATH
     timeout = 3
-    timeouts = {"navigate": 25}
+    timeouts = {"navigate": 25, "browse": 20}
     timeout_code = "not_ready"
     require_result_object = False
 
@@ -40,6 +40,9 @@ class CouchsideHook(DBusHook):
         if state.get("playback_owner") != "music_assistant":
             raise BridgeError("invalid_response", "Unsupported Couchside control protocol")
         return state
+
+    def check_item(self, kind, value):
+        validate_content(kind, value)
 
     async def navigate(self, request_id, kind, value):
         # Now Playing needs only the UI; everything else is resolved through Music Assistant.

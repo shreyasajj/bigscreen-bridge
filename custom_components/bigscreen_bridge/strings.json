@@ -16,6 +16,13 @@
         "data": {
           "token": "Pairing token"
         }
+      },
+      "pair": {
+        "title": "Pair with {name}",
+        "description": "A Bigscreen Bridge was found at {url}. Enter its private pairing token from ~/.config/bigscreen-bridge/config.json on the TV.",
+        "data": {
+          "token": "Pairing token"
+        }
       }
     },
     "error": {
@@ -26,7 +33,9 @@
     },
     "abort": {
       "already_configured": "This Bigscreen is already configured",
-      "reauth_successful": "Pairing token updated"
-    }
+      "reauth_successful": "Pairing token updated",
+      "not_supported": "This bridge announces an unsupported protocol"
+    },
+    "flow_title": "{name}"
   }
 }

@@ -2,7 +2,7 @@
   "version": 1,
   "repositories": {
     "couchside": {
-      "path": "/Users/shre/Documents/projects/couchside",
+      "path": "/Users/shre/Documents/projects/.pr-worktrees/couchside-bridge",
       "repository": "https://github.com/shreyasajj/couchside",
       "development_branch": "bigscreen-bridge",
       "base_revision": "722e614",

@@ -6,7 +6,7 @@ config_root="$HOME/.config/bigscreen-bridge"
 mkdir -p "$install_root" "$config_root" "$HOME/.config/systemd/user"
 chmod 700 "$config_root"
 python3 -m venv "$install_root/venv"
-"$install_root/venv/bin/pip" install .
+"$install_root/venv/bin/pip" install ".[mqtt]"
 cp bigscreen-bridge/kwin/monitor.js "$install_root/monitor.js"
 python3 - "$config_root/config.json" "$install_root/monitor.js" <<'PY'
 import json, os, secrets, socket, sys, uuid

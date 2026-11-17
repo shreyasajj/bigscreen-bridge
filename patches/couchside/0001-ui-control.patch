@@ -48,10 +48,10 @@ index b61c7bd..0b8c0ea 100644
  cleanup-commands:
 diff --git a/src/couchside/core/bridge_control.py b/src/couchside/core/bridge_control.py
 new file mode 100644
-index 0000000..ab7ef90
+index 0000000..f3a031f
 --- /dev/null
 +++ b/src/couchside/core/bridge_control.py
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,90 @@
 +"""Strict, UI-only control protocol. Playback remains owned by Music Assistant."""
 +from collections import OrderedDict
 +import json
@@ -60,6 +60,8 @@ index 0000000..ab7ef90
 +BUS_NAME = "io.github.shreyasajj.Couchside.Control"
 +OBJECT_PATH = "/io/github/shreyasajj/Couchside/Control"
 +CONTENT_TYPES = ("now_playing", "search", "track", "album", "artist", "playlist")
++# Library sections a controller may list; each is also a navigable content type.
++BROWSE_PATHS = {"playlist": "Playlists", "album": "Albums", "artist": "Artists", "track": "Tracks"}
 +
 +
 +class ControlError(Exception):
@@ -82,6 +84,15 @@ index 0000000..ab7ef90
 +    elif not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}://" + kind + r"/[^\s?#]{1,1536}", value):
 +        raise ControlError("invalid_request", "Use a Music Assistant URI matching the content type")
 +    return kind, value
++
++
++def validate_browse(request):
++    path, offset, limit = request.get("path"), request.get("offset", 0), request.get("limit", 50)
++    if path is not None and path not in BROWSE_PATHS:
++        raise ControlError("invalid_request", "Unknown library section")
++    if type(offset) is not int or not 0 <= offset <= 1000000 or type(limit) is not int or not 1 <= limit <= 50:
++        raise ControlError("invalid_request", "Invalid page bounds")
++    return path, offset, limit
 +
 +
 +class Dispatcher:
@@ -113,6 +124,9 @@ index 0000000..ab7ef90
 +            if command == "navigate":
 +                allowed |= {"content_type", "content_id"}
 +                validate_content(request.get("content_type"), request.get("content_id"))
++            elif command == "browse":
++                allowed |= {"path", "offset", "limit"}
++                validate_browse(request)
 +            elif command not in ("get_state", "focus"):
 +                raise ControlError("unsupported", "Only UI commands are supported")
 +            if request.keys() - allowed:
@@ -188,10 +202,10 @@ index f407e2a..5359680 100644
  
 diff --git a/src/couchside/ui/bridge_control.py b/src/couchside/ui/bridge_control.py
 new file mode 100644
-index 0000000..0989cfd
+index 0000000..0cb7acd
 --- /dev/null
 +++ b/src/couchside/ui/bridge_control.py
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,196 @@
 +"""Single-instance session-bus endpoint and QML navigation acknowledgements."""
 +import asyncio
 +import json
@@ -205,7 +219,9 @@ index 0000000..0989cfd
 +from PySide6.QtCore import QObject, Signal, Slot
 +
 +from couchside.core import library
-+from couchside.core.bridge_control import BUS_NAME, OBJECT_PATH, CONTENT_TYPES, ControlError, Dispatcher
++from couchside.core.bridge_control import (
++    BROWSE_PATHS, BUS_NAME, OBJECT_PATH, CONTENT_TYPES, ControlError, Dispatcher, validate_browse, validate_content,
++)
 +from couchside.core.connection import ConnState
 +from couchside.core.playback import find_local_player
 +
@@ -292,11 +308,41 @@ index 0000000..0989cfd
 +        local = find_local_player(list(client.players), identity) if client and identity else None
 +        return {"protocol": 1, "ready": self.ready.is_set(),
 +                "music_assistant_ready": bool(c and c.conn.state is ConnState.CONNECTED),
-+                "content_types": list(CONTENT_TYPES),
++                "content_types": list(CONTENT_TYPES), "browse": True,
 +                "playback_owner": "music_assistant", "ma_player_id": local.player_id if local else None,
 +                "view": self.view}
 +
++    async def browse(self, request):
++        """List the Music Assistant library read-only; nothing here navigates or plays."""
++        path, offset, limit = validate_browse(request)
++        if path is None:
++            return {"items": [{"id": key, "name": name, "path": key, "content_type": None}
++                              for key, name in BROWSE_PATHS.items()], "next_offset": None}
++        c = self.controller
++        if c is None or c.conn.state is not ConnState.CONNECTED or c.conn.client is None:
++            raise ControlError("not_ready", "Music Assistant is not connected")
++        fetch = getattr(c.conn.client.music, f"get_library_{path}s")
++        try:
++            # One extra row tells whether another page exists without a count query.
++            found = await asyncio.wait_for(fetch(limit=limit + 1, offset=offset), 15)
++        except Exception as exc:
++            raise ControlError("browse_failed", "Music Assistant could not list this section") from exc
++        items = []
++        for item in list(found)[:limit]:
++            card = library.to_card(c.conn.client, item)
++            try:
++                if card is None or card.kind != path:
++                    continue
++                validate_content(path, card.uri)  # only offer what navigate will accept
++            except ControlError:
++                continue
++            items.append({"id": card.uri, "name": card.title[:512], "subtitle": card.subtitle[:512],
++                          "content_type": path, "path": None})
++        return {"items": items, "next_offset": offset + limit if len(found) > limit else None}
++
 +    async def execute(self, request):
++        if request.get("command") == "browse":
++            return await self.browse(request)
 +        try:
 +            await asyncio.wait_for(self.ready.wait(), 10)
 +        except TimeoutError as exc:
@@ -581,10 +627,10 @@ index 0000000..5c1a978
 +    execute.assert_not_awaited()
 diff --git a/tests/test_bridge_ui.py b/tests/test_bridge_ui.py
 new file mode 100644
-index 0000000..ad56ed3
+index 0000000..9f6b511
 --- /dev/null
 +++ b/tests/test_bridge_ui.py
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,106 @@
 +from types import SimpleNamespace as NS
 +from unittest.mock import AsyncMock
 +
@@ -662,3 +708,32 @@ index 0000000..ad56ed3
 +    controller.conn.state = ConnState.RECONNECTING
 +    controller.changed.emit()
 +    assert len(emitted) == 2
++
++
++async def test_browse_lists_library_without_navigating(ui):
++    control, controller = ui
++    root = await control.execute(dict(id="root", command="browse"))
++    assert [row["path"] for row in root["items"]] == ["playlist", "album", "artist", "track"]
++    rows = [NS(uri=f"library://album/{n}", media_type="album", name=f"Album {n}", artist_str="Artist", image=None)
++            for n in range(3)] + [NS(uri="not a uri", media_type="album", name="Broken", artist_str="", image=None)]
++    controller.conn.client.music.get_library_albums = AsyncMock(return_value=rows[:3])
++    page = await control.execute(dict(id="page", command="browse", path="album", offset=4, limit=2))
++    controller.conn.client.music.get_library_albums.assert_awaited_once_with(limit=3, offset=4)
++    assert [row["id"] for row in page["items"]] == ["library://album/0", "library://album/1"]
++    assert page["next_offset"] == 6 and page["items"][0]["content_type"] == "album"
++    controller.conn.client.music.get_library_albums = AsyncMock(return_value=rows[3:])
++    assert (await control.execute(dict(id="bad", command="browse", path="album")))["items"] == []
++    assert control.view == {"type": "now_playing", "id": ""}
++    controller.conn.state = ConnState.RECONNECTING
++    with pytest.raises(ControlError, match="not connected"):
++        await control.execute(dict(id="down", command="browse", path="album"))
++
++
++async def test_browse_requests_are_validated_by_the_dispatcher(ui):
++    import json
++    control, _ = ui
++    for extra in (dict(path="radio"), dict(limit=51), dict(offset=-1), dict(content_id="x")):
++        reply = json.loads(await control.dispatcher.handle(json.dumps(dict(id=str(extra), command="browse", **extra))))
++        assert reply["error"]["code"] == "invalid_request"
++    reply = json.loads(await control.dispatcher.handle(json.dumps(dict(id="ok", command="browse"))))
++    assert reply["ok"] and len(reply["result"]["items"]) == 4

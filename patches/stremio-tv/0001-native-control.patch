@@ -29,10 +29,10 @@ index f0350fa..c5f5579 100644
 +[interface, build commands and tests](docs/bigscreen-bridge.md).
 diff --git a/docs/bigscreen-bridge.md b/docs/bigscreen-bridge.md
 new file mode 100644
-index 0000000..499e539
+index 0000000..ed1dca8
 --- /dev/null
 +++ b/docs/bigscreen-bridge.md
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,82 @@
 +# Native Bigscreen Bridge control
 +
 +This branch adds a local application control endpoint, independent of the existing
@@ -60,8 +60,9 @@ index 0000000..499e539
 +{"id":"request-4","command":"seek","position":120}
 +```
 +
-+Commands: `get_state`, `focus`, `open`, `play`, `pause`, `stop`, `seek` (absolute
-+seconds). Content types: `movie`, `series`, `episode`. IDs support alphanumerics,
++Commands: `get_state`, `focus`, `open`, `browse`, `play`, `pause`, `stop`, `seek` (absolute
++seconds). `browse` takes `offset` and `limit` (1-50) and lists the stored library,
++most recently watched first, without navigating. Content types: `movie`, `series`, `episode`. IDs support alphanumerics,
 +colon, dot, underscore and hyphen, up to 256 characters; other ID forms are
 +explicitly rejected. No volume/next/previous support is advertised.
 +
@@ -208,10 +209,10 @@ index 4b42d59..a0baedd 100644
            publish: (state) => ha.publish(state),
 diff --git a/native/bridgecontrol.cpp b/native/bridgecontrol.cpp
 new file mode 100644
-index 0000000..fef7b79
+index 0000000..2fdba3a
 --- /dev/null
 +++ b/native/bridgecontrol.cpp
-@@ -0,0 +1,156 @@
+@@ -0,0 +1,167 @@
 +#include "bridgecontrol.h"
 +#include <QDBusConnection>
 +#include <QDateTime>
@@ -241,7 +242,7 @@ index 0000000..fef7b79
 +QVariantMap BridgeControl::snapshot() const {
 +    return {{"protocol", 1}, {"ready", ready_},
 +            {"content_types", QStringList{"movie", "series", "episode"}},
-+            {"capabilities", QStringList{"play", "pause", "stop", "seek"}}, {"media", state_}};
++            {"capabilities", QStringList{"play", "pause", "stop", "seek"}}, {"browse", true}, {"media", state_}};
 +}
 +
 +QString BridgeControl::answer(const QString &id, const QVariantMap &body) const {
@@ -276,6 +277,7 @@ index 0000000..fef7b79
 +    QStringList allowed{"id", "command"};
 +    if (command == "open") allowed << "content_type" << "content_id" << "resume";
 +    else if (command == "seek") allowed << "position";
++    else if (command == "browse") allowed << "offset" << "limit";
 +    else if (!QStringList{"get_state", "focus", "play", "pause", "stop"}.contains(command))
 +        return error("unsupported", "Unsupported command");
 +    for (auto it = req.begin(); it != req.end(); ++it)
@@ -293,6 +295,16 @@ index 0000000..fef7b79
 +    if (command == "seek" && (!req.value("position").isDouble() || !std::isfinite(req.value("position").toDouble())
 +                              || req.value("position").toDouble() < 0))
 +        return error("invalid_request", "Seek position must be finite and nonnegative");
++    if (command == "browse") {
++        // Whole numbers only; the renderer pages its stored library with them.
++        auto whole = [&](const char *key, double fallback, double low, double high) {
++            const auto value = req.value(key);
++            const double number = value.isUndefined() ? fallback : value.toDouble(-1);
++            return (value.isUndefined() || value.isDouble()) && number == std::floor(number) && number >= low && number <= high;
++        };
++        if (!whole("offset", 0, 0, 1000000) || !whole("limit", 50, 1, 50))
++            return error("invalid_request", "Invalid page bounds");
++    }
 +    if (command == "get_state") {
 +        const auto response = answer(id, {{"ok", true}, {"result", snapshot()}});
 +        remember(id, req, response);
@@ -551,10 +563,10 @@ index 2ad399e..3e14f9e 100644
    # page on the LAN and the mDNS lookup of Home Assistant.
 diff --git a/test/bridge-protocol.test.js b/test/bridge-protocol.test.js
 new file mode 100644
-index 0000000..d3eb6ff
+index 0000000..831fe47
 --- /dev/null
 +++ b/test/bridge-protocol.test.js
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,77 @@
 +const { test } = require('node:test');
 +const assert = require('node:assert/strict');
 +const fs = require('node:fs');
@@ -614,8 +626,26 @@ index 0000000..d3eb6ff
 +  await assert.rejects(executeRequest({id:'one',command:'open',content_type:'movie',content_id:'tt123'},d),{code:'command_timeout'});
 +  assert.deepEqual(d.calls,[]);
 +});
++test('browse pages the stored library without navigating', async () => {
++  const {executeRequest} = await protocol;
++  const d = deps();
++  d.getLibrary = () => ({
++    'movie:tt1': {type:'movie', id:'tt1', name:'Old', time:5, updatedAt:1},
++    'series:tt2': {type:'series', id:'tt2', name:'New', time:90, updatedAt:9},
++    'movie:bad': {type:'movie', id:'http://x/y', name:'Unsafe', updatedAt:5},
++    'tv:tt3': {type:'tv', id:'tt3', name:'Other', updatedAt:7},
++  });
++  const first = await executeRequest({id:'b1', command:'browse', limit:1}, d);
++  assert.deepEqual(first, {items:[{id:'tt2', name:'New', content_type:'series', path:null, resumable:true}], next_offset:1, total:2});
++  const second = await executeRequest({id:'b2', command:'browse', offset:1, limit:1}, d);
++  assert.equal(second.items[0].id, 'tt1');
++  assert.equal(second.next_offset, null);
++  assert.deepEqual(d.calls, []);
++  for (const bad of [{limit:51}, {offset:-1}, {offset:1.5}, {path:'x'}])
++    await assert.rejects(executeRequest({id:'b3', command:'browse', ...bad}, d));
++});
 diff --git a/test/native-test.js b/test/native-test.js
-index 383a7ac..43ed302 100644
+index 383a7ac..68aed0c 100644
 --- a/test/native-test.js
 +++ b/test/native-test.js
 @@ -12,7 +12,8 @@
@@ -648,7 +678,7 @@ index 383a7ac..43ed302 100644
    check('app still running', !appExited);
    page.close();
    stopping = true;
-@@ -306,6 +311,65 @@ function recordPeak(source, ms) {
+@@ -306,6 +311,68 @@ function recordPeak(source, ms) {
    console.log(failures ? `\n${failures} FAILURES` : '\nAll native checks passed.');
    process.exit(failures ? 1 : 0);
  
@@ -706,6 +736,9 @@ index 383a7ac..43ed302 100644
 +    check('bridge: second instance exits successfully', exit === 0);
 +    check('bridge: second instance preserves player', await page.evaluate(() => !document.getElementById('player-root').classList.contains('hidden')));
 +    check('bridge: stop acknowledged', (await call('stop')).ok);
++    const shelf = await call('browse', {limit: 5});
++    check('bridge: browse lists the stored library', shelf.ok && shelf.result.items.some(i => i.id === 'mock:movie1' && i.content_type === 'movie'));
++    check('bridge: browse rejects bad page bounds', (await call('browse', {limit: 500})).error?.code === 'invalid_request');
 +    check('bridge: stop closes player', !!await waitFor(() => page.evaluate(() => document.getElementById('player-root').classList.contains('hidden'))));
 +    const noPlayer = await call('pause');
 +    check('bridge: no-player controls return an error', !noPlayer.ok && noPlayer.error.code === 'not_playing');
@@ -716,10 +749,10 @@ index 383a7ac..43ed302 100644
      const watcher = ha.watch(['stremio_tv/#', 'homeassistant/#']);
 diff --git a/ui/js/bridge-protocol.js b/ui/js/bridge-protocol.js
 new file mode 100644
-index 0000000..afd8007
+index 0000000..039d790
 --- /dev/null
 +++ b/ui/js/bridge-protocol.js
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,89 @@
 +// UI bridge contract, kept independent of DOM/native APIs for deterministic tests.
 +const ID = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,255}$/;
 +const validId = value => typeof value === 'string' && ID.test(value) && !/[\r\n]/.test(value);
@@ -744,6 +777,11 @@ index 0000000..afd8007
 +  } else if (request.command === 'seek') {
 +    allowed.add('position');
 +    if (typeof request.position !== 'number' || !Number.isFinite(request.position) || request.position < 0) fail('Invalid seek position');
++  } else if (request.command === 'browse') {
++    ['offset', 'limit'].forEach(k => allowed.add(k));
++    const {offset = 0, limit = 50} = request;
++    if (!Number.isInteger(offset) || offset < 0 || offset > 1000000 || !Number.isInteger(limit) || limit < 1 || limit > 50)
++      fail('Invalid page bounds');
 +  } else if (!['play', 'pause', 'stop'].includes(request.command)) throw new BridgeError('unsupported', 'Unsupported renderer command');
 +  if (Object.keys(request).some(k => !allowed.has(k))) fail('Unknown request fields');
 +  return request;
@@ -755,6 +793,21 @@ index 0000000..afd8007
 +    if (deps.cancelled?.()) throw new BridgeError('command_timeout', 'The application command was cancelled');
 +  };
 +  guard();
++  if (request.command === 'browse') {
++    // Read-only: the stored library, most recently watched first. Nothing navigates.
++    const {offset = 0, limit = 50} = request;
++    const entries = Object.values(deps.getLibrary() || {})
++      .filter(e => e && ['movie', 'series'].includes(e.type) && validId(e.id) && typeof e.name === 'string')
++      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
++    return {
++      items: entries.slice(offset, offset + limit).map(e => ({
++        id: e.id, name: e.name.slice(0, 512), content_type: e.type, path: null,
++        resumable: e.time > 10,
++      })),
++      next_offset: offset + limit < entries.length ? offset + limit : null,
++      total: entries.length,
++    };
++  }
 +  if (request.command !== 'open') {
 +    const cmd = request.command === 'seek' ? {action: 'seek_absolute', position: request.position} : {action: request.command};
 +    if (!deps.runPlayerCommand(cmd)) throw new BridgeError('not_playing', 'No active player supports this command');
@@ -791,10 +844,10 @@ index 0000000..afd8007
 +}
 diff --git a/ui/js/bridgecontrol.js b/ui/js/bridgecontrol.js
 new file mode 100644
-index 0000000..a97c6c1
+index 0000000..3431efb
 --- /dev/null
 +++ b/ui/js/bridgecontrol.js
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,49 @@
 +import { executeRequest } from './bridge-protocol.js';
 +import { getMeta } from './addons.js';
 +import { Storage } from './storage.js';
@@ -824,6 +877,7 @@ index 0000000..a97c6c1
 +        cancelled: () => operation.cancelled || Date.now() > operation.deadline,
 +        closePlayer: () => { operation.changed = true; closePlayer(); },
 +        getLibraryEntry: (type, id) => Storage.getLibraryEntry(type, id),
++        getLibrary: () => Storage.getLibrary(),
 +        closeModals,
 +        push: (...args) => router.push(...args),
 +        focusEpisode: (screen, videoId) => {

@@ -45,8 +45,11 @@ class StremioHook(DBusHook):
     kinds = KINDS
     bus_name = BUS_NAME
     object_path = OBJECT_PATH
-    timeouts = {"open": 25}
+    timeouts = {"open": 25, "browse": 25}
     require_result_object = False
+
+    def check_item(self, kind, value):
+        validate_content(kind, value)
 
     def accept(self, state):
         state = super().accept(state)

@@ -40,6 +40,12 @@ class MprisRegistry:
         self.overflow = False
         self.dirty = True               # a full re-read is owed
         self.on_change = lambda: None
+        self.followers = {}             # app id -> hook whose changes this player announces
+        self.settling = {}              # app id -> timer for the follow-up read
+
+    def follow(self, app, hook):
+        """Let an app's own MPRIS player stand in for the change signal its hook lacks."""
+        self.followers[app] = hook
 
     def _mark(self):
         self.dirty = True
@@ -48,6 +54,7 @@ class MprisRegistry:
     async def initialize(self):
         self.bus.add_message_handler(self._signal)
         for rule in ["type='signal',path='/org/mpris/MediaPlayer2',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'",
+                     "type='signal',path='/org/mpris/MediaPlayer2',interface='org.mpris.MediaPlayer2.Player',member='Seeked'",
                      "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0namespace='org.mpris.MediaPlayer2'"]:
             await call(self.bus, 'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus', 'AddMatch', 's', [rule])
         await self.refresh()
@@ -55,6 +62,19 @@ class MprisRegistry:
     def _signal(self, message):
         if message.message_type != MessageType.SIGNAL:
             return
+        if (message.path == PATH and message.sender in self.owners
+                and (message.interface, message.member) in ((PLAYER, 'Seeked'), ('org.freedesktop.DBus.Properties', 'PropertiesChanged'))):
+            record = self.players.get(self.owners[message.sender])
+            follower = self.followers.get(record.get('app')) if record else None
+            if follower:
+                follower.announce()
+                # The app's own state may trail its MPRIS player; read once more after it caught up.
+                settle = getattr(follower, 'settle', 0)
+                if settle:
+                    pending = self.settling.pop(follower.app, None)
+                    if pending:
+                        pending.cancel()
+                    self.settling[follower.app] = asyncio.get_running_loop().call_later(settle, follower.announce)
         if (message.interface == 'org.freedesktop.DBus.Properties' and message.path == PATH
                 and message.member == 'PropertiesChanged' and message.sender in self.owners
                 and len(message.body) == 3 and message.body[0] == PLAYER):
@@ -121,6 +141,13 @@ class MprisRegistry:
                 self.changed(key, previous['state'], 'unavailable')
         self.players = players
         self.owners = {record['owner']: key for key, record in players.items()}
+        present = {record['app'] for record in players.values()}
+        for app, hook in self.followers.items():
+            # Without a player there is nothing to announce changes, so the hook is polled again.
+            if hook.pushed != (app in present):
+                hook.pushed = app in present
+                hook.dirty = True
+                hook.on_change()
         return list(players.values())
 
     async def control(self, key, command):
