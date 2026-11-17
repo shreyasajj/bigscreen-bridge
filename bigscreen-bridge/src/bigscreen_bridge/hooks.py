@@ -17,6 +17,7 @@ import uuid
 from dbus_next import Message, MessageType
 
 from .adapters import BridgeError
+from .diagnostics import NULL
 
 
 BROWSE_PATH = re.compile(r"[a-z_]{1,32}")
@@ -45,15 +46,24 @@ class Hook:
         self.pushed = False         # the app has announced a change itself
         self.dirty = True           # a refresh is owed
         self.on_change = lambda: None
+        self.recorder = NULL
+
+    @property
+    def polled(self):
+        """Read on every pass even when nothing announced a change."""
+        return not self.pushed
 
     @property
     def stale(self):
         """Apps that never announce changes have to be polled."""
-        return self.dirty or not self.pushed
+        return self.dirty or self.polled
 
-    def announce(self):
+    def announce(self, received=True):
+        """`received` is false for the bridge's own follow-up read, which is not a signal."""
         self.pushed = True
         self.dirty = True
+        if received:
+            self.recorder.hook_signal(self)
         self.on_change()
 
     async def subscribe(self):
@@ -74,7 +84,9 @@ class Hook:
             if not isinstance(response, dict) or response.get("id") != request_id:
                 raise ValueError("Mismatched response ID")
             if response.get("ok") is not True:
-                raise BridgeError(response["error"]["code"], response["error"]["message"])
+                error = BridgeError(response["error"]["code"], response["error"]["message"])
+                error.from_app = True   # its text is the app's payload; diagnostics keep only the code
+                raise error
             if self.require_result_object and not isinstance(response["result"], dict):
                 raise ValueError("Expected result object")
             return response["result"]
@@ -95,9 +107,11 @@ class Hook:
             self.state = state
             self.content_types = [kind for kind in self.kinds if kind in state["content_types"]]
             self.enabled = True
-        except BridgeError:
+            self.recorder.hook_read(self)
+        except BridgeError as exc:
             # A verified hook stays enabled so the bridge can cold-launch it again.
             self.state = None
+            self.recorder.hook_read(self, exc)
 
     def is_ready(self):
         return bool(self.state and self.state.get("ready"))

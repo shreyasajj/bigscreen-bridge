@@ -47,9 +47,9 @@ class VacuumTubeHook(SocketHook):
     settle = 1.2    # the renderer republishes its state once a second
 
     @property
-    def stale(self):
+    def polled(self):
         # MPRIS says nothing about Leanback readiness, so keep polling until it is ready.
-        return super().stale or not self.is_ready()
+        return super().polled or not self.is_ready()
 
     def accept(self, state):
         state = super().accept(state)

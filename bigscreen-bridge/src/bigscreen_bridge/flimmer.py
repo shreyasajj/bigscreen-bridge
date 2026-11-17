@@ -73,4 +73,5 @@ class FlimmerHook(DBusHook):
                 raise ValueError("Invalid page continuation")
         except (KeyError, TypeError, ValueError, BridgeError) as exc:
             raise BridgeError("invalid_response", "Invalid Flimmer channel catalogue") from exc
+        self.recorder.hook_channels(self, result.get("total"))
         return result
