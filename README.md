@@ -100,6 +100,8 @@ Restart HA after installing the custom integration. Then use **Settings → Devi
 or changed token can be updated through HA's reauthentication flow.
 
 Port 8765 is the bridge address, not Home Assistant's port.
+The integration has only been run in a temporary Home Assistant started by
+`scripts/smoke-homeassistant.py`; it has not been installed in a real HA instance yet.
 
 Each bridge's stored UUID identifies its HA device independently of its IP address.
 Configure each TV separately. A changed UUID is treated as another device.
