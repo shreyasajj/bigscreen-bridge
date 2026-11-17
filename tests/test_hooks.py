@@ -134,3 +134,23 @@ async def test_device_player_owns_system_volume_and_display(bridge):
     assert device.state == MediaPlayerState.OFF and app.state == MediaPlayerState.PLAYING
     data["audio"] = {"available": False, "capabilities": []}
     assert not device.supported_features & MediaPlayerEntityFeature.VOLUME_SET
+
+
+def test_position_ticks_are_not_state_changes():
+    from bigscreen_bridge.server import significant
+
+    def snap(position, stamp, state="playing", **extra):
+        media = {"state": state, "position": position, "updated_at": stamp, "title": "T", **extra}
+        return {"apps": [{"id": "stremio", "media": media}], "sessions": [{"id": "app:stremio", "media": dict(media)}]}
+
+    base = significant(snap(10, "2026-11-16T12:00:10Z"))
+    assert base == significant(snap(12, "2026-11-16T12:00:12.000Z"))            # normal progress
+    assert base != significant(snap(60, "2026-11-16T12:00:12Z"))                # a seek
+    assert base != significant(snap(12, "2026-11-16T12:00:12Z", title="Next"))  # new content
+    assert base != significant(snap(12, "2026-11-16T12:00:12Z", state="paused"))
+    idle = significant(snap(0, "2026-11-16T12:00:10Z", state="idle"))
+    assert idle == significant(snap(0, "2026-11-16T12:00:12Z", state="idle"))   # timestamp churn
+    assert significant(snap(5, None)) == significant(snap(7, None))             # MPRIS: no anchor
+    original = snap(10, "2026-11-16T12:00:10Z")
+    significant(original)
+    assert original["apps"][0]["media"]["updated_at"]                           # input untouched

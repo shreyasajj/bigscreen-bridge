@@ -1,5 +1,5 @@
 diff --git a/README.md b/README.md
-index 6d9243b..d1a348b 100644
+index 654b9ea..153062d 100644
 --- a/README.md
 +++ b/README.md
 @@ -270,3 +270,31 @@ player selection), `src/couchside/sendspin` (bundled player helpers),
@@ -46,145 +46,6 @@ index b61c7bd..0b8c0ea 100644
    - --socket=pulseaudio      # Sendspin audio output (PipeWire-pulse)
    - --own-name=org.mpris.MediaPlayer2.Sendspin.*  # Sendspin MPRIS: ...Sendspin.instance<pid>
  cleanup-commands:
-diff --git a/src/couchside/ui/app.py b/src/couchside/ui/app.py
-index f407e2a..5359680 100644
---- a/src/couchside/ui/app.py
-+++ b/src/couchside/ui/app.py
-@@ -38,6 +38,7 @@ def main() -> int:
-     from couchside.sendspin.pairing import tail_log
-     from couchside.sendspin.runner import log_path
-     from couchside.ui.controller import AppController
-+    from couchside.ui.bridge_control import UiControl
- 
-     app = QGuiApplication(sys.argv)
-     app.setApplicationName("Couchside")
-@@ -49,14 +50,31 @@ def main() -> int:
-     loop = qasync.QEventLoop(app)
-     asyncio.set_event_loop(loop)
- 
-+    control = UiControl()
-+    try:
-+        primary = loop.run_until_complete(control.acquire())
-+    except Exception:
-+        logging.getLogger(__name__).exception("Could not acquire the UI control endpoint")
-+        control.close()
-+        loop.close()
-+        return 1
-+    if not primary:
-+        control.close()
-+        loop.close()
-+        return 0
-+
-     settings = load_settings()
-     controller = AppController(settings)
- 
-     engine = QQmlApplicationEngine()
-     engine.rootContext().setContextProperty("app", controller)
-+    engine.rootContext().setContextProperty("bridgeControl", control)
-     engine.load(str(Path(__file__).parent / "qml" / "Main.qml"))
-     if not engine.rootObjects():
-+        control.close()
-+        loop.close()
-         return 1
-+    control.attach(controller)
- 
-     closing = asyncio.Event()
-     app.aboutToQuit.connect(closing.set)
-@@ -77,8 +95,11 @@ def main() -> int:
-         for t in tasks:
-             t.cancel()
- 
--    with loop:
--        loop.run_until_complete(run())
-+    try:
-+        with loop:
-+            loop.run_until_complete(run())
-+    finally:
-+        control.close()
-     return 0
- 
- 
-diff --git a/src/couchside/ui/qml/LibraryPage.qml b/src/couchside/ui/qml/LibraryPage.qml
-index 2851208..7304587 100644
---- a/src/couchside/ui/qml/LibraryPage.qml
-+++ b/src/couchside/ui/qml/LibraryPage.qml
-@@ -9,6 +9,8 @@ Kirigami.Page {
-     id: page
-     property real u: 1
-     property var sheet: null
-+    property bool bridgeManaged: false
-+    objectName: "library"
- 
-     padding: 0
-     globalToolBarStyle: Kirigami.ApplicationHeaderStyle.None
-@@ -22,13 +24,19 @@ Kirigami.Page {
-         else searchBox.forceActiveFocus()
-     }
-     property bool cardFocused: false
--    Component.onCompleted: { app.loadRecents(); searchBox.forceActiveFocus() }
-+    Component.onCompleted: { if (!bridgeManaged) app.loadRecents(); searchBox.forceActiveFocus() }
-     function handleBack() {
-         // Back while typing: keyboard away, straight to the results (Bigscreen's keyboard
-         // swallows the first key after it hides, so landing there saves a press).
-         if (field.activeFocus) { debounce.stop(); app.search(field.text); toResults(); return true }
-         return false
-     }
-+    function setBridgeQuery(query) {
-+        debounce.stop()
-+        field.text = query
-+        stopEditing()
-+        toResults()
-+    }
-     function startEditing() { field.forceActiveFocus(); Qt.inputMethod.show() }
-     // Letters from a keyboard remote: start a new search with them (or keep typing),
-     // without the on-screen keyboard.
-diff --git a/src/couchside/ui/qml/Main.qml b/src/couchside/ui/qml/Main.qml
-index 7ea4865..2fd952a 100644
---- a/src/couchside/ui/qml/Main.qml
-+++ b/src/couchside/ui/qml/Main.qml
-@@ -48,6 +48,42 @@ Kirigami.ApplicationWindow {
-         SpeakersPage { u: root.u; sheet: actionSheet; groupEditor: groupEditorOverlay }
-     }
- 
-+    Component { id: bridgeContentComponent; ContentPage { u: root.u; sheet: actionSheet } }
-+    Connections {
-+        target: bridgeControl
-+        function onNavigationRequested(requestId, kind, payloadJson) {
-+            try {
-+                const payload = JSON.parse(payloadJson)
-+                if (kind !== "focus") {
-+                    exitDialog.close()
-+                    actionSheet.close()
-+                    groupEditorOverlay.close()
-+                    app.closeAdminCode()
-+                    pageStack.clear()
-+                    pageStack.push(nowPlayingComponent)
-+                    if (kind === "search") {
-+                        pageStack.push(libraryComponent, {bridgeManaged: true})
-+                        pageStack.currentItem.setBridgeQuery(payload.value)
-+                    } else if (kind !== "now_playing") {
-+                        pageStack.push(bridgeContentComponent, {item: payload.item})
-+                    }
-+                }
-+                root.showFullScreen()
-+                root.raise()
-+                root.requestActivate()
-+                Qt.callLater(function() {
-+                    const expected = kind === "search" ? "library" : "bridgeContent"
-+                    const valid = kind === "focus" || (kind === "now_playing" ? pageStack.depth === 1
-+                        : pageStack.currentItem && pageStack.currentItem.objectName === expected)
-+                    bridgeControl.completeNavigation(requestId, Boolean(valid))
-+                })
-+            } catch (error) {
-+                console.warn("Bridge navigation failed:", error)
-+                bridgeControl.completeNavigation(requestId, false)
-+            }
-+        }
-+    }
-+
-     function showSetup() {
-         if (!pageStack.currentItem || pageStack.currentItem.objectName !== "setup") pageStack.push(setupComponent)
-     }
 diff --git a/src/couchside/core/bridge_control.py b/src/couchside/core/bridge_control.py
 new file mode 100644
 index 0000000..ab7ef90
@@ -267,12 +128,70 @@ index 0000000..ab7ef90
 +            if len(self.cache) > 128:
 +                self.cache.popitem(last=False)
 +        return response
+diff --git a/src/couchside/ui/app.py b/src/couchside/ui/app.py
+index f407e2a..5359680 100644
+--- a/src/couchside/ui/app.py
++++ b/src/couchside/ui/app.py
+@@ -38,6 +38,7 @@ def main() -> int:
+     from couchside.sendspin.pairing import tail_log
+     from couchside.sendspin.runner import log_path
+     from couchside.ui.controller import AppController
++    from couchside.ui.bridge_control import UiControl
+ 
+     app = QGuiApplication(sys.argv)
+     app.setApplicationName("Couchside")
+@@ -49,14 +50,31 @@ def main() -> int:
+     loop = qasync.QEventLoop(app)
+     asyncio.set_event_loop(loop)
+ 
++    control = UiControl()
++    try:
++        primary = loop.run_until_complete(control.acquire())
++    except Exception:
++        logging.getLogger(__name__).exception("Could not acquire the UI control endpoint")
++        control.close()
++        loop.close()
++        return 1
++    if not primary:
++        control.close()
++        loop.close()
++        return 0
++
+     settings = load_settings()
+     controller = AppController(settings)
+ 
+     engine = QQmlApplicationEngine()
+     engine.rootContext().setContextProperty("app", controller)
++    engine.rootContext().setContextProperty("bridgeControl", control)
+     engine.load(str(Path(__file__).parent / "qml" / "Main.qml"))
+     if not engine.rootObjects():
++        control.close()
++        loop.close()
+         return 1
++    control.attach(controller)
+ 
+     closing = asyncio.Event()
+     app.aboutToQuit.connect(closing.set)
+@@ -77,8 +95,11 @@ def main() -> int:
+         for t in tasks:
+             t.cancel()
+ 
+-    with loop:
+-        loop.run_until_complete(run())
++    try:
++        with loop:
++            loop.run_until_complete(run())
++    finally:
++        control.close()
+     return 0
+ 
+ 
 diff --git a/src/couchside/ui/bridge_control.py b/src/couchside/ui/bridge_control.py
 new file mode 100644
-index 0000000..bd58ee6
+index 0000000..0989cfd
 --- /dev/null
 +++ b/src/couchside/ui/bridge_control.py
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,164 @@
 +"""Single-instance session-bus endpoint and QML navigation acknowledgements."""
 +import asyncio
 +import json
@@ -282,7 +201,7 @@ index 0000000..bd58ee6
 +from dbus_next.aio import MessageBus
 +from dbus_next import Message, MessageType
 +from dbus_next.constants import NameFlag, RequestNameReply
-+from dbus_next.service import ServiceInterface, method
++from dbus_next.service import ServiceInterface, method, signal as dbus_signal
 +from PySide6.QtCore import QObject, Signal, Slot
 +
 +from couchside.core import library
@@ -314,6 +233,10 @@ index 0000000..bd58ee6
 +                return json.dumps({"id": request_id, "ok": False,
 +                                   "error": {"code": "internal_error", "message": "UI operation failed"}})
 +
++    @dbus_signal()
++    def StateChanged(self):
++        """Tell listeners to re-read the state; the signal itself carries nothing."""
++
 +
 +class UiControl(QObject):
 +    navigationRequested = Signal(str, str, str)
@@ -321,6 +244,8 @@ index 0000000..bd58ee6
 +    def __init__(self):
 +        super().__init__()
 +        self.bus = None
++        self.endpoint = None
++        self.announced = None
 +        self.controller = None
 +        self.ready = asyncio.Event()
 +        self.pending = {}
@@ -332,7 +257,8 @@ index 0000000..bd58ee6
 +        self.bus = await MessageBus().connect()
 +        reply = await self.bus.request_name(BUS_NAME, NameFlag.DO_NOT_QUEUE)
 +        if reply == RequestNameReply.PRIMARY_OWNER:
-+            self.bus.export(OBJECT_PATH, Endpoint(self))
++            self.endpoint = Endpoint(self)
++            self.bus.export(OBJECT_PATH, self.endpoint)
 +            return True
 +        # Only the primary creates a controller, QML window or Sendspin helper.
 +        request = {"id": str(uuid.uuid4()), "command": "focus"}
@@ -346,6 +272,18 @@ index 0000000..bd58ee6
 +    def attach(self, controller):
 +        self.controller = controller
 +        self.ready.set()
++        # The controller's general change signal covers Music Assistant connection
++        # and local-player changes; announce() drops everything that left the state alone.
++        controller.changed.connect(self.announce)
++        self.announce()
++
++    @Slot()
++    def announce(self):
++        state = self.snapshot()
++        if state != self.announced:
++            self.announced = state
++            if self.endpoint:
++                self.endpoint.StateChanged()
 +
 +    def snapshot(self):
 +        c = self.controller
@@ -402,6 +340,7 @@ index 0000000..bd58ee6
 +                raise ControlError("navigation_failed", "QML could not open the requested view")
 +            if kind != "focus":
 +                self.view = {"type": kind, "id": value}
++                self.announce()
 +            return self.snapshot()
 +        except TimeoutError as exc:
 +            raise ControlError("navigation_failed", "QML did not acknowledge navigation") from exc
@@ -419,7 +358,7 @@ index 0000000..bd58ee6
 +            self.bus.disconnect()
 diff --git a/src/couchside/ui/qml/ContentPage.qml b/src/couchside/ui/qml/ContentPage.qml
 new file mode 100644
-index 0000000..aa89387
+index 0000000..a870375
 --- /dev/null
 +++ b/src/couchside/ui/qml/ContentPage.qml
 @@ -0,0 +1,85 @@
@@ -437,7 +376,7 @@ index 0000000..aa89387
 +    property var sheet: null
 +    padding: 0
 +    globalToolBarStyle: Kirigami.ApplicationHeaderStyle.None
-+    background: PageBackground { tint: app.backgroundColour }
++    background: Rectangle { color: "#0d0b1a" }
 +    function focusDefault() { actions.forceActiveFocus() }
 +    Component.onCompleted: focusDefault()
 +
@@ -457,7 +396,7 @@ index 0000000..aa89387
 +            QQC2.Label {
 +                text: page.item.kind || ""
 +                textFormat: Text.PlainText
-+                color: Theme.textDim
++                color: "#cccccc"
 +                font.pixelSize: 28 * page.u
 +            }
 +            QQC2.Label {
@@ -465,7 +404,7 @@ index 0000000..aa89387
 +                textFormat: Text.PlainText
 +                Layout.fillWidth: true
 +                wrapMode: Text.Wrap
-+                color: Theme.text
++                color: "#ffffff"
 +                font.pixelSize: 48 * page.u
 +                font.bold: true
 +            }
@@ -474,7 +413,7 @@ index 0000000..aa89387
 +                textFormat: Text.PlainText
 +                Layout.fillWidth: true
 +                wrapMode: Text.Wrap
-+                color: Theme.textDim
++                color: "#cccccc"
 +                font.pixelSize: 30 * page.u
 +            }
 +            QQC2.Button {
@@ -494,20 +433,101 @@ index 0000000..aa89387
 +                ], actions, mode => app.playUri(page.item.uri, mode))
 +                background: Rectangle {
 +                    radius: 12 * page.u
-+                    color: actions.activeFocus ? Theme.focus : Theme.surfaceHigh
++                    color: actions.activeFocus ? "#ffffff" : "#334455"
 +                    border.width: actions.activeFocus ? 5 * page.u : 0
-+                    border.color: Theme.focus
++                    border.color: "#ffffff"
 +                }
 +                contentItem: QQC2.Label {
 +                    text: actions.text
 +                    font: actions.font
-+                    color: actions.activeFocus ? Theme.focusText : Theme.text
++                    color: actions.activeFocus ? "#000000" : "#ffffff"
 +                }
 +            }
 +            Item { Layout.fillHeight: true }
 +        }
 +    }
 +}
+diff --git a/src/couchside/ui/qml/LibraryPage.qml b/src/couchside/ui/qml/LibraryPage.qml
+index 652c128..eca0c9e 100644
+--- a/src/couchside/ui/qml/LibraryPage.qml
++++ b/src/couchside/ui/qml/LibraryPage.qml
+@@ -9,6 +9,8 @@ Kirigami.Page {
+     id: page
+     property real u: 1
+     property var sheet: null
++    property bool bridgeManaged: false
++    objectName: "library"
+ 
+     padding: 0
+     globalToolBarStyle: Kirigami.ApplicationHeaderStyle.None
+@@ -22,13 +24,19 @@ Kirigami.Page {
+         else searchBox.forceActiveFocus()
+     }
+     property bool cardFocused: false
+-    Component.onCompleted: { app.loadRecents(); searchBox.forceActiveFocus() }
++    Component.onCompleted: { if (!bridgeManaged) app.loadRecents(); searchBox.forceActiveFocus() }
+     function handleBack() {
+         // Back while typing: keyboard away, straight to the results (Bigscreen's keyboard
+         // swallows the first key after it hides, so landing there saves a press).
+         if (field.activeFocus) { debounce.stop(); app.search(field.text); toResults(); return true }
+         return false
+     }
++    function setBridgeQuery(query) {
++        debounce.stop()
++        field.text = query
++        stopEditing()
++        toResults()
++    }
+     function startEditing() { field.forceActiveFocus(); Qt.inputMethod.show() }
+     // Letters from a keyboard remote: start a new search with them (or keep typing),
+     // without the on-screen keyboard.
+diff --git a/src/couchside/ui/qml/Main.qml b/src/couchside/ui/qml/Main.qml
+index c786c4e..9889fda 100644
+--- a/src/couchside/ui/qml/Main.qml
++++ b/src/couchside/ui/qml/Main.qml
+@@ -48,6 +48,42 @@ Kirigami.ApplicationWindow {
+         SpeakersPage { u: root.u; sheet: actionSheet; groupEditor: groupEditorOverlay }
+     }
+ 
++    Component { id: bridgeContentComponent; ContentPage { u: root.u; sheet: actionSheet } }
++    Connections {
++        target: bridgeControl
++        function onNavigationRequested(requestId, kind, payloadJson) {
++            try {
++                const payload = JSON.parse(payloadJson)
++                if (kind !== "focus") {
++                    exitDialog.close()
++                    actionSheet.close()
++                    groupEditorOverlay.close()
++                    app.closeAdminCode()
++                    pageStack.clear()
++                    pageStack.push(nowPlayingComponent)
++                    if (kind === "search") {
++                        pageStack.push(libraryComponent, {bridgeManaged: true})
++                        pageStack.currentItem.setBridgeQuery(payload.value)
++                    } else if (kind !== "now_playing") {
++                        pageStack.push(bridgeContentComponent, {item: payload.item})
++                    }
++                }
++                root.showFullScreen()
++                root.raise()
++                root.requestActivate()
++                Qt.callLater(function() {
++                    const expected = kind === "search" ? "library" : "bridgeContent"
++                    const valid = kind === "focus" || (kind === "now_playing" ? pageStack.depth === 1
++                        : pageStack.currentItem && pageStack.currentItem.objectName === expected)
++                    bridgeControl.completeNavigation(requestId, Boolean(valid))
++                })
++            } catch (error) {
++                console.warn("Bridge navigation failed:", error)
++                bridgeControl.completeNavigation(requestId, false)
++            }
++        }
++    }
++
+     function showSetup() {
+         if (!pageStack.currentItem || pageStack.currentItem.objectName !== "setup") pageStack.push(setupComponent)
+     }
 diff --git a/tests/test_bridge_control.py b/tests/test_bridge_control.py
 new file mode 100644
 index 0000000..5c1a978
@@ -561,10 +581,10 @@ index 0000000..5c1a978
 +    execute.assert_not_awaited()
 diff --git a/tests/test_bridge_ui.py b/tests/test_bridge_ui.py
 new file mode 100644
-index 0000000..3985bef
+index 0000000..ad56ed3
 --- /dev/null
 +++ b/tests/test_bridge_ui.py
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,77 @@
 +from types import SimpleNamespace as NS
 +from unittest.mock import AsyncMock
 +
@@ -626,3 +646,19 @@ index 0000000..3985bef
 +    monkeypatch.setattr(controller, "_get_client_id", lambda: None)
 +    controller.conn.client.players = [NS(player_id="another-speaker", output_protocols=[NS()])]
 +    assert control.snapshot()["ma_player_id"] is None
++
++
++async def test_state_changes_are_announced_once(ui):
++    control, controller = ui
++    emitted = []
++    control.endpoint = NS(StateChanged=lambda: emitted.append(True))
++    controller.conn.client.music.get_item_by_uri = AsyncMock(return_value=NS(
++        uri="library://album/1", media_type="album", name="Album", artist_str="Artist", image=None))
++    await control.execute(dict(id="item", command="navigate", content_type="album", content_id="library://album/1"))
++    assert len(emitted) == 1
++    controller.changed.emit()  # unrelated UI churn leaves the published state alone
++    await control.execute(dict(id="focus", command="focus"))
++    assert len(emitted) == 1
++    controller.conn.state = ConnState.RECONNECTING
++    controller.changed.emit()
++    assert len(emitted) == 2

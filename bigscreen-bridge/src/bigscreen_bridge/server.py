@@ -4,6 +4,7 @@ import asyncio
 from collections import OrderedDict
 import contextlib
 import copy
+from datetime import datetime
 from dataclasses import dataclass
 import hmac
 import json
@@ -76,6 +77,28 @@ def _open_flimmer(request):
 
 def _open_youtube(request):
     return validate_youtube(request.get("content_type"), request.get("content_id"))
+
+
+def _steady(media):
+    """Media without the fields that advance on their own while nothing actually changed."""
+    media = dict(media)
+    stamp, position = media.pop("updated_at", None), media.get("position")
+    if media.get("state") == "playing" and isinstance(position, (int, float)):
+        try:
+            started = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp() - position
+            media["position"] = round(started / 3)   # the implied start; moves only on seek or stall
+        except (AttributeError, ValueError, OverflowError):
+            del media["position"]                    # no anchor to compare against
+    return media
+
+
+def significant(snapshot):
+    """A snapshot reduced to what clients must be told about; they interpolate position."""
+    snapshot = copy.deepcopy(snapshot)
+    for entry in snapshot.get("apps", []) + snapshot.get("sessions", []):
+        if isinstance(entry.get("media"), dict):
+            entry["media"] = _steady(entry["media"])
+    return snapshot
 
 
 @dataclass(frozen=True)
@@ -461,7 +484,7 @@ async def serve(config_path):
             while True:
                 now = loop.time()
                 slow = now >= slow_at
-                previous = bridge.snapshot()
+                previous = significant(bridge.snapshot())
                 jobs = [bridge.sessions.observe(full=slow)]
                 if slow or bridge.couchside.stale:
                     jobs.append(bridge.couchside.refresh())
@@ -472,7 +495,7 @@ async def serve(config_path):
                 results = await asyncio.gather(*jobs, return_exceptions=True)
                 for failure in (r for r in results if isinstance(r, Exception)):
                     LOG.warning("State refresh failed: %r", failure)
-                if previous != bridge.snapshot():
+                if previous != significant(bridge.snapshot()):
                     await bridge.notify()
                 wake.clear()
                 with contextlib.suppress(TimeoutError):

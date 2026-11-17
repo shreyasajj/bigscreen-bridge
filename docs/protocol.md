@@ -48,6 +48,37 @@ frames, bounded per-session result cache, no arbitrary launch arguments/URLs,
 no remote eval, user-private config, no secrets in logs. Local D-Bus trusts the
 logged-in Unix user; sandboxed app hooks need narrowly scoped bus permissions.
 
+## Adapter contract (shared by every application hook)
+
+Every app exposes one local request/response channel carrying strict JSON:
+`{"id", "command", ...}` in, `{"id", "ok", "result" | "error": {"code", "message"}}`
+out, with the request ID echoed. Two transports exist: `Execute(s) -> s` on a
+session-bus name the sandboxed app owns (Couchside, Stremio, Flimmer), and one JSON
+line per connection on a user-private Unix socket (VacuumTube). `get_state` returns
+at least `protocol: 1`, `ready`, and `content_types`; apps with a player add `media`
+and `capabilities`. In the bridge this is `hooks.py` (`Hook`, `DBusHook`,
+`SocketHook`); an app module adds only its identity, validation and navigation call,
+and `server.py` routes every app through one `ADAPTERS` table.
+
+D-Bus hooks should emit a data-free `StateChanged` signal on their control interface
+whenever the state they publish really changes (not for ordinary playback progress).
+The bridge then re-reads `get_state`; it also watches the name's owner, so start and
+exit are seen immediately. A hook that has never emitted the signal is polled every 2
+seconds, so unpatched or older builds keep working. Everything is fully re-read every
+10 seconds as a safety net.
+
+Snapshots are sent to clients only when something other than the playback clock
+changed: `updated_at` is ignored, and while playing, `position` only counts when it
+departs from real time (a seek or a stall). Clients interpolate from `position` and
+`updated_at`. Transport capabilities are listed only while the app reports playing,
+paused or buffering; volume capabilities are listed whenever the app negotiates them.
+
+System commands (no `app` field) act on the device: `set_volume` (`volume_level`
+0..1), `mute`, `unmute`, `screen_on`, `screen_off`, `lock_screen`, `get_power_state`,
+and the session commands `pause_active`, `pause_all`, `resume_active`,
+`resume_previously_paused`, `stop_active`, `stop_all`. In Home Assistant the device
+player maps volume/mute and turn on/off to the first five; app players never do.
+
 ## Couchside UI extension (implemented phase 5)
 
 The `open` command accepts `app: "couchside"`, `content_type` (without prefix), and
