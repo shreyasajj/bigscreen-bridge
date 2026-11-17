@@ -1,0 +1,440 @@
+{
+  "type": "state",
+  "protocol": 1,
+  "device_id": "3f2c9a1e-7b4d-4c55-9a0e-5d2f6b8c1a90",
+  "name": "Living Room TV",
+  "active_app": "stremio",
+  "available": true,
+  "apps": [
+    {
+      "id": "couchside",
+      "name": "Couchside",
+      "installed": true,
+      "running": true,
+      "capabilities": [
+        "focus"
+      ],
+      "state": "idle",
+      "content_types": [
+        "couchside_now_playing",
+        "couchside_search",
+        "couchside_track",
+        "couchside_album",
+        "couchside_artist",
+        "couchside_playlist"
+      ],
+      "browse": true,
+      "playback_owner": "music_assistant",
+      "ma_player_id": "sendspin-living-room",
+      "view": {
+        "type": "now_playing",
+        "id": ""
+      }
+    },
+    {
+      "id": "stremio",
+      "name": "Stremio TV",
+      "installed": true,
+      "running": true,
+      "capabilities": [
+        "focus",
+        "play",
+        "pause",
+        "stop",
+        "seek"
+      ],
+      "state": "paused",
+      "content_types": [
+        "stremio_movie",
+        "stremio_series",
+        "stremio_episode"
+      ],
+      "browse": true,
+      "hook_installed": true,
+      "control_available": true,
+      "media": {
+        "state": "paused",
+        "title": "Game of Thrones",
+        "type": "series",
+        "episode": "S01E02 — The Kingsroad",
+        "position": 1834,
+        "duration": 3360,
+        "poster": "https://images.metahub.space/poster/medium/tt0944947/img",
+        "updated_at": "2026-11-17T16:41:59.400Z",
+        "content_id": "tt0944947:1:2"
+      }
+    },
+    {
+      "id": "flimmer",
+      "name": "Flimmer",
+      "installed": true,
+      "running": false,
+      "capabilities": [
+        "focus"
+      ],
+      "state": "off",
+      "content_types": [
+        "flimmer_channel"
+      ],
+      "browse": true,
+      "hook_installed": true,
+      "control_available": false
+    },
+    {
+      "id": "vacuumtube",
+      "name": "VacuumTube",
+      "installed": true,
+      "running": true,
+      "capabilities": [
+        "focus",
+        "play",
+        "stop",
+        "seek",
+        "volume_set",
+        "volume_mute"
+      ],
+      "state": "paused",
+      "content_types": [
+        "youtube_video",
+        "youtube_playlist",
+        "youtube_search"
+      ],
+      "browse": false,
+      "hook_installed": true,
+      "control_available": true,
+      "media": {
+        "video_id": "M7lc1UVf-VE",
+        "title": "YouTube Developers Live: Embedded Web Player Customization",
+        "state": "paused",
+        "position": 312.4,
+        "duration": 1287,
+        "updated_at": "2026-11-17T16:41:59.200Z",
+        "thumbnail": "https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg",
+        "volume": 0.8,
+        "muted": false,
+        "output_volume": 0.8,
+        "content_id": "M7lc1UVf-VE",
+        "type": "video",
+        "poster": "https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg"
+      },
+      "view": {
+        "kind": "watch",
+        "video_id": "M7lc1UVf-VE"
+      }
+    }
+  ],
+  "power": {
+    "display": {
+      "supported": true,
+      "outputs": {
+        "HDMI-A-1": "off"
+      },
+      "display_on": false
+    },
+    "authorization": {
+      "suspend": "yes",
+      "shutdown": "yes",
+      "restart": "yes"
+    },
+    "capabilities": [
+      "screen_off",
+      "screen_on",
+      "lock_screen"
+    ],
+    "locked": false,
+    "system_state": "awake",
+    "network": [
+      {
+        "interface": "enp3s0",
+        "mac": "02:00:5e:10:00:01",
+        "hardware_wakeup": "enabled",
+        "wol_verified_suspend": false,
+        "wol_verified_poweroff": false
+      }
+    ],
+    "blocked": {
+      "suspend": [],
+      "shutdown": [],
+      "restart": []
+    }
+  },
+  "audio": {
+    "available": true,
+    "volume": 0.42,
+    "raw_volume": 0.42,
+    "muted": false,
+    "capabilities": [
+      "mute",
+      "unmute",
+      "set_volume"
+    ],
+    "streams": [
+      {
+        "index": 61,
+        "pid": 2210,
+        "app": "couchside",
+        "serial": "118",
+        "role": "sendspin",
+        "stream_active": true,
+        "producing_audio": null,
+        "muted": false,
+        "volume": 1.0
+      }
+    ]
+  },
+  "sessions": [
+    {
+      "id": "app:stremio",
+      "app": "stremio",
+      "state": "paused",
+      "media": {
+        "state": "paused",
+        "title": "Game of Thrones",
+        "type": "series",
+        "episode": "S01E02 — The Kingsroad",
+        "position": 1834,
+        "duration": 3360,
+        "poster": "https://images.metahub.space/poster/medium/tt0944947/img",
+        "updated_at": "2026-11-17T16:41:59.400Z",
+        "content_id": "tt0944947:1:2"
+      },
+      "capabilities": [
+        "play",
+        "pause",
+        "stop",
+        "seek"
+      ],
+      "available": true,
+      "role": "video"
+    },
+    {
+      "id": "app:vacuumtube",
+      "app": "vacuumtube",
+      "state": "paused",
+      "media": {
+        "video_id": "M7lc1UVf-VE",
+        "title": "YouTube Developers Live: Embedded Web Player Customization",
+        "state": "paused",
+        "position": 312.4,
+        "duration": 1287,
+        "updated_at": "2026-11-17T16:41:59.200Z",
+        "thumbnail": "https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg",
+        "volume": 0.8,
+        "muted": false,
+        "output_volume": 0.8,
+        "content_id": "M7lc1UVf-VE",
+        "type": "video",
+        "poster": "https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg"
+      },
+      "capabilities": [
+        "play",
+        "stop",
+        "seek",
+        "volume_set",
+        "volume_mute"
+      ],
+      "available": true,
+      "role": "video"
+    },
+    {
+      "id": "mpris::1.41",
+      "bus_name": "org.mpris.MediaPlayer2.Sendspin",
+      "owner": ":1.41",
+      "pid": 2210,
+      "app": "couchside",
+      "name": "Sendspin",
+      "desktop": "org.sendspin.cli",
+      "state": "paused",
+      "available": true,
+      "role": "music_assistant",
+      "capabilities": [],
+      "media": {
+        "title": "Clair de Lune",
+        "content_id": "b9319e804aa715fa850ae7e65a210a3bb1a9657a05235a278f88acdfdcddf3cd",
+        "position": 96.0,
+        "duration": 302.0
+      }
+    }
+  ],
+  "paused_by_bridge": [
+    "app:stremio"
+  ],
+  "diagnostics": {
+    "schema": 1,
+    "generated_at": "2026-11-17T16:42:00.000Z",
+    "service": {
+      "version": "0.1.0",
+      "started_at": "2026-11-17T06:33:00.000Z",
+      "health": "ok",
+      "port": 8765
+    },
+    "websocket": {
+      "clients": 1,
+      "last_connected_at": "2026-11-17T06:33:40.000Z",
+      "last_disconnected_at": null,
+      "last_disconnect_reason": null
+    },
+    "discovery": {
+      "enabled": true,
+      "announced": true,
+      "service_type": "_bigscreen-bridge._tcp",
+      "instance": "Living Room TV (3f2c9a1e)",
+      "error": null
+    },
+    "mqtt": {
+      "configured": true,
+      "connected": true,
+      "broker": "mqtt.lan:1883",
+      "tls": false,
+      "commands_enabled": false,
+      "last_connected_at": "2026-11-17T06:33:20.000Z",
+      "last_error": null,
+      "retry_seconds": 5,
+      "failures": 0
+    },
+    "kwin": {
+      "ready": true,
+      "windows": 3,
+      "last_report_at": "2026-11-17T16:41:18.000Z"
+    },
+    "hooks": {
+      "couchside": {
+        "transport": "dbus",
+        "endpoint": "io.github.shreyasajj.Couchside.Control",
+        "enabled": true,
+        "reachable": true,
+        "ready": true,
+        "mode": "pushed",
+        "poll_reason": null,
+        "signal_source": "StateChanged",
+        "signals_received": 12,
+        "last_signal_at": "2026-11-17T16:35:32.000Z",
+        "last_read_at": "2026-11-17T16:41:54.000Z",
+        "last_read_ok": true,
+        "consecutive_failures": 0,
+        "last_error": null,
+        "music_assistant_ready": true
+      },
+      "stremio": {
+        "transport": "dbus",
+        "endpoint": "io.github.shreyasajj.StremioTV.Control",
+        "enabled": true,
+        "reachable": true,
+        "ready": true,
+        "mode": "pushed",
+        "poll_reason": null,
+        "signal_source": "StateChanged",
+        "signals_received": 58,
+        "last_signal_at": "2026-11-17T16:41:49.000Z",
+        "last_read_at": "2026-11-17T16:41:59.000Z",
+        "last_read_ok": true,
+        "consecutive_failures": 0,
+        "last_error": null
+      },
+      "flimmer": {
+        "transport": "dbus",
+        "endpoint": "io.github.jclsn.Flimmer.Control",
+        "enabled": true,
+        "reachable": false,
+        "ready": false,
+        "mode": "polled",
+        "poll_reason": "not_running",
+        "signal_source": "StateChanged",
+        "signals_received": 0,
+        "last_signal_at": null,
+        "last_read_at": "2026-11-17T16:41:54.000Z",
+        "last_read_ok": false,
+        "consecutive_failures": 0,
+        "last_error": {
+          "code": "not_ready",
+          "message": "Flimmer control endpoint is unavailable",
+          "at": "2026-11-17T16:41:54.000Z"
+        },
+        "catalogue_loading": false
+      },
+      "vacuumtube": {
+        "transport": "socket",
+        "endpoint": "$XDG_RUNTIME_DIR/bigscreen-bridge/vacuumtube.sock",
+        "enabled": true,
+        "reachable": true,
+        "ready": true,
+        "mode": "pushed",
+        "poll_reason": null,
+        "signal_source": "mpris",
+        "signals_received": 133,
+        "last_signal_at": "2026-11-17T16:41:52.500Z",
+        "last_read_at": "2026-11-17T16:41:53.700Z",
+        "last_read_ok": true,
+        "consecutive_failures": 0,
+        "last_error": null
+      }
+    },
+    "mpris": [
+      {
+        "bus_name": "org.mpris.MediaPlayer2.Sendspin",
+        "identity": "Sendspin",
+        "desktop": "org.sendspin.cli",
+        "app": "couchside",
+        "state": "paused",
+        "role": "music_assistant",
+        "superseded_by": null
+      },
+      {
+        "bus_name": "org.mpris.MediaPlayer2.chromium.instance5120",
+        "identity": "Chromium",
+        "desktop": null,
+        "app": "vacuumtube",
+        "state": "paused",
+        "role": "other",
+        "superseded_by": "app:vacuumtube"
+      }
+    ],
+    "commands": [
+      {
+        "id": "a41f0c2e-9a7d-4d4e-8e8f-1c0b8a5f3e11",
+        "command": "pause",
+        "app": "vacuumtube",
+        "transport": "websocket",
+        "started_at": "2026-11-17T16:35:07.620Z",
+        "finished_at": "2026-11-17T16:35:08.000Z",
+        "ok": true,
+        "error_code": null,
+        "duration_ms": 380
+      },
+      {
+        "id": "7c2e9b10-3f5a-4b8c-a1d2-e3f4a5b6c7d8",
+        "command": "open",
+        "app": "stremio",
+        "transport": "websocket",
+        "started_at": "2026-11-17T16:35:29.860Z",
+        "finished_at": "2026-11-17T16:35:32.000Z",
+        "ok": true,
+        "error_code": null,
+        "duration_ms": 2140
+      },
+      {
+        "id": "2468ace0-1357-49bd-8f00-13579bdf2468",
+        "command": "pause_all",
+        "app": null,
+        "transport": "websocket",
+        "started_at": "2026-11-17T16:40:55.380Z",
+        "finished_at": "2026-11-17T16:40:56.000Z",
+        "ok": true,
+        "error_code": null,
+        "duration_ms": 620
+      },
+      {
+        "id": "13579bdf-2468-4ace-9f11-2468ace01357",
+        "command": "screen_off",
+        "app": null,
+        "transport": "websocket",
+        "started_at": "2026-11-17T16:40:56.860Z",
+        "finished_at": "2026-11-17T16:40:58.000Z",
+        "ok": true,
+        "error_code": null,
+        "duration_ms": 1140
+      }
+    ],
+    "warnings": []
+  }
+}
