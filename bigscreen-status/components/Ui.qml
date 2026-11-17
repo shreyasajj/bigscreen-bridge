@@ -17,6 +17,10 @@ QtObject {
     property var fixture: ({})
     readonly property var snap: fixture
     readonly property var diag: fixture.diagnostics || ({})
+    // The pairing code from Status(); never part of the snapshot or diagnostics.
+    readonly property var pairing: fixture.pairing || null
+    // Set by main.qml in live mode: asks the bridge for a new code (the screen's only write).
+    property var startPairing: null
 
     // "live", "connecting", "unreachable" or "fixture"; offline hides everything but the Bridge card.
     property string link: "fixture"

@@ -63,11 +63,13 @@ def test_index_lists_every_fixture():
 def test_fixture_matches_the_real_bridge(entry):
     fixture = json.loads((FIXTURES / entry["file"]).read_text())
     diagnostics = fixture.pop("diagnostics")
+    pairing = fixture.pop("pairing")
+    assert pairing is None or set(pairing) == {"code", "reason", "expires_at"}
     assert set(fixture) == set(SNAPSHOT)
     # Within diagnostics, nothing the real module does not produce, and every section it does.
     assert keys(diagnostics) <= keys(DIAGNOSTICS)
     assert set(diagnostics) == set(DIAGNOSTICS)
-    for section in ("service", "websocket", "discovery", "mqtt", "kwin"):
+    for section in ("service", "websocket", "discovery", "mqtt", "kwin", "pairing"):
         assert set(diagnostics[section]) == set(DIAGNOSTICS[section])
     assert set(diagnostics["hooks"]) == set(DIAGNOSTICS["hooks"])
     for app, hook in diagnostics["hooks"].items():

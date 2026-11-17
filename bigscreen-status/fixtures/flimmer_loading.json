@@ -396,6 +396,13 @@
         "last_error": null
       }
     },
+    "pairing": {
+      "active": false,
+      "reason": null,
+      "paired_clients": 1,
+      "last_paired_at": "2026-11-16T09:00:00.000Z",
+      "last_paired_name": "Home Assistant"
+    },
     "mpris": [
       {
         "bus_name": "org.mpris.MediaPlayer2.Sendspin",
@@ -485,5 +492,6 @@
       }
     ],
     "warnings": []
-  }
+  },
+  "pairing": null
 }

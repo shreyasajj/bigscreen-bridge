@@ -1,4 +1,4 @@
-// Bridge status: a read-only 10-foot screen for Plasma Bigscreen.
+// Bridge status: a 10-foot status screen for Plasma Bigscreen; its only write is a new pairing code.
 // Live (default): reads org.bigscreen.Bridge.Status on the session bus.
 // Fixtures:       `-- --fixtures [scenario[:card[:sources]]]` reads fixtures/*.json instead.
 // Remote: ▲ ▼ move · OK show data sources · Back close · ◀ ▶ scenario (fixtures only).
@@ -41,6 +41,7 @@ QQC2.ApplicationWindow {
 
     readonly property var allSections: [
         {file: "OverviewSection.qml"},
+        {file: "PairingSection.qml"},
         {file: "AppSection.qml", app: "couchside"},
         {file: "AppSection.qml", app: "stremio"},
         {file: "AppSection.qml", app: "flimmer"},
@@ -108,8 +109,10 @@ QQC2.ApplicationWindow {
                 Ui.linkError = ""
                 window.lastReadMs = Date.now()
                 window.loadError = ""
-                window.show(Object.assign({}, status.snapshot, {diagnostics: status.diagnostics}))
+                window.show(Object.assign({}, status.snapshot,
+                                          {diagnostics: status.diagnostics, pairing: status.pairing}))
             })
+            Ui.startPairing = () => item.startPairing()
             item.failed.connect(reason => {
                 // Never leave the last answer on screen as if it were current.
                 window.link = "unreachable"
@@ -322,7 +325,7 @@ QQC2.ApplicationWindow {
                 }
                 Item { Layout.fillWidth: true }
                 QQC2.Label {
-                    text: window.live ? "Read-only · session bus, no token"
+                    text: window.live ? "Session bus, no token · only the pairing code can change"
                         : "Read-only · fixture " + (window.scenarios.length ? window.scenarios[window.current].file : "")
                     font.pixelSize: Ui.small
                     color: Kirigami.Theme.disabledTextColor

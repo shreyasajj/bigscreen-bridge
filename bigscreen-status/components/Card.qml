@@ -11,6 +11,8 @@ Item {
     property string headingDetail: ""
     property string sources: ""
     property bool expanded: false
+    // When set, OK runs this instead of showing the data sources.
+    property var activate: null
     default property alias content: body.data
 
     focus: true
@@ -32,7 +34,8 @@ Item {
 
     Keys.onPressed: event => {
         if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Select) {
-            card.expanded = !card.expanded
+            if (card.activate) card.activate()
+            else card.expanded = !card.expanded
             event.accepted = true
         }
     }

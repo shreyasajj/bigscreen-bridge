@@ -33,6 +33,7 @@ from bigscreen_bridge.discovery import SERVICE_TYPE, service_record  # noqa: E40
 from bigscreen_bridge.flimmer import FlimmerHook  # noqa: E402
 from bigscreen_bridge.mpris import media_state  # noqa: E402
 from bigscreen_bridge.mqtt import settings as mqtt_settings  # noqa: E402
+from bigscreen_bridge.pairing import Pairing  # noqa: E402
 from bigscreen_bridge.server import Bridge  # noqa: E402
 from bigscreen_bridge.stremio import StremioHook  # noqa: E402
 from bigscreen_bridge.vacuumtube import VacuumTubeHook  # noqa: E402
@@ -163,7 +164,8 @@ class Clock:
 class World:
     """A fake bridge built from the real classes, plus a list of timed events to replay."""
 
-    def __init__(self, windows, hooks, mpris, power, audio, paused_by_bridge=(), clients=1, installed=FLATPAK):
+    def __init__(self, windows, hooks, mpris, power, audio, paused_by_bridge=(), clients=1, installed=FLATPAK,
+                 paired=1):
         self.clock = Clock()
         self.recorder = Recorder(clock=self.clock, monotonic=self.clock.monotonic)
         self.recorder.service["version"] = "0.1.0"   # the package version, pinned so fixtures stay stable
@@ -171,6 +173,13 @@ class World:
         self.bridge = bridge = Bridge(CONFIG, wm, diagnostics=self.recorder)
         bridge.installed = {FLATPAK[app] for app in installed}
         bridge.clients = {object() for _ in range(clients)}
+        # The real Pairing, with no file and a fixed code so fixtures stay stable.
+        bridge.pairing = Pairing(Path("/nonexistent/clients.json"), clock=lambda: self.clock().timestamp(),
+                                 monotonic=self.clock.monotonic)
+        bridge.pairing.clients = [{"id": f"c{n}", "name": "Home Assistant", "hash": "0" * 64,
+                                   "created_at": "2026-11-16T09:00:00.000Z"} for n in range(paired)]
+        if paired:
+            bridge.pairing.last_paired = {"name": "Home Assistant", "at": "2026-11-16T09:00:00.000Z"}
         for app, cls in (("couchside", CouchsideHook), ("stremio", StremioHook),
                          ("flimmer", FlimmerHook), ("vacuumtube", VacuumTubeHook)):
             hook = cls(None, True) if cls is not VacuumTubeHook else cls(True, "/run/user/1000/bigscreen-bridge/"
@@ -268,7 +277,10 @@ class World:
                 fn(*args, **kwargs)
             self.clock.ago = 0
             self.bridge.wm.ready.set()
-            return self.bridge.snapshot(), self.recorder.to_dict(self.bridge)
+            pairing = self.bridge.pairing
+            if pairing.code is not None:
+                pairing.code = "7KQ4MXD2"
+            return self.bridge.snapshot(), self.recorder.to_dict(self.bridge), pairing.public()
         finally:
             self.recorder.uninstall()
             logging.getLogger("bigscreen_bridge").propagate = True
@@ -362,6 +374,11 @@ def scenarios():
     yield ("ha_disconnected", "Home Assistant disconnected",
            "No WebSocket client has been connected for three minutes.", w)
 
+    w = World(**healthy(), clients=0, paired=0)
+    healthy_history(w, commands=HEALTHY_COMMANDS[3:])
+    w.at(250, w.bridge.pairing.refresh)    # nothing has paired: a code stays on screen
+    yield ("unpaired", "Waiting to pair", "Nothing has paired yet, so the TV shows a pairing code for Home Assistant.", w)
+
     w = World(**healthy(hooks={"couchside": couchside_state(), "stremio": stremio_state("paused"),
                                "vacuumtube": vacuumtube_state()}))
     healthy_history(w, commands=[])
@@ -386,9 +403,10 @@ def main():
     OUT.mkdir(exist_ok=True)
     index = []
     for key, title, summary, world in scenarios():
-        snapshot, diagnostics = world.run()
-        # The top level is exactly Bridge.snapshot(); `diagnostics` exactly Recorder.to_dict().
-        fixture = {**snapshot, "diagnostics": diagnostics}
+        snapshot, diagnostics, pairing = world.run()
+        # The top level is exactly Bridge.snapshot(); `diagnostics` exactly Recorder.to_dict();
+        # `pairing` exactly what Status() adds for the screen.
+        fixture = {**snapshot, "diagnostics": diagnostics, "pairing": pairing}
         text = json.dumps(fixture, indent=2, ensure_ascii=False)
         assert CONFIG["token"] not in text and CONFIG["mqtt"]["password"] not in text
         (OUT / f"{key}.json").write_text(text + "\n")

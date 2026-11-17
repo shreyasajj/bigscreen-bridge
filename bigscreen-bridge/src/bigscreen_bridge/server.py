@@ -25,11 +25,12 @@ from .sessions import SessionController
 from .config import load_config
 from .diagnostics import Recorder, close_reason
 from .discovery import advertise
+from .pairing import Pairing
 from .mqtt import MqttLink, settings as mqtt_settings
 from .deep_links import parse_uri
 from .adapters import APPS, BridgeError
 from .kwin import KWin
-from .status import StatusInterface, StatusSignal
+from .status import PATH as STATUS_PATH, PairingInterface, StatusInterface, StatusSignal
 from .couchside import CouchsideHook, KINDS, validate_content
 from .vacuumtube import VacuumTubeHook, validate_content as validate_youtube, validate_volume
 from .flimmer import FlimmerHook, validate_channel
@@ -131,8 +132,9 @@ ADAPTERS = {adapter.app: adapter for adapter in (
 
 
 class Bridge:
-    def __init__(self, config, wm, launcher=launch_app, diagnostics=None):
+    def __init__(self, config, wm, launcher=launch_app, diagnostics=None, pairing=None):
         self.config = config
+        self.pairing = pairing
         self.wm = wm
         self.launcher = launcher
         self.diagnostics = diagnostics or Recorder()
@@ -208,7 +210,14 @@ class Bridge:
 
     def status(self):
         """The token-free local read: what clients are sent, plus the bridge's own diagnostics."""
-        return {"snapshot": self.snapshot(), "diagnostics": self.diagnostics.to_dict(self)}
+        return {"snapshot": self.snapshot(), "diagnostics": self.diagnostics.to_dict(self),
+                "pairing": self.pairing.public() if self.pairing else None}
+
+    def authorized(self, header):
+        expected = "Bearer " + self.config["token"]
+        if hmac.compare_digest(header.encode(), expected.encode()):
+            return True
+        return bool(self.pairing and header.startswith("Bearer ") and self.pairing.accepts(header[7:]))
 
     async def notify(self):
         self.diagnostics.changed()
@@ -480,10 +489,29 @@ class Bridge:
         LOG.log(level, "Request %s failed: %s %s via %s (%s)", (entry.get("id") or "-")[:8],
                 entry.get("command") or "-", entry.get("app") or "system", entry.get("transport") or "-", code)
 
+    async def pair(self, request):
+        """Swap the code shown on the TV for this client's own token. No browser origins."""
+        status = {"invalid_request": 400, "invalid_code": 403, "too_many_clients": 409, "rate_limited": 429}
+        try:
+            if request.headers.get("Origin"):
+                raise BridgeError("invalid_request", "Browser origins cannot pair")
+            if not self.pairing:
+                raise BridgeError("unsupported", "Pairing is not available")
+            try:
+                body = await request.json()
+            except ValueError as exc:
+                raise BridgeError("invalid_request", "Expected a JSON object") from exc
+            if not isinstance(body, dict) or body.keys() - {"code", "name"}:
+                raise BridgeError("invalid_request", "Expected code and name only")
+            token = self.pairing.redeem(body.get("code"), body.get("name"))
+        except BridgeError as exc:
+            return web.json_response({"ok": False, "error": {"code": exc.code, "message": str(exc)}},
+                                     status=status.get(exc.code, 404))
+        return web.json_response({"ok": True, "token": token, "device_id": self.config["device_id"],
+                                  "name": self.config.get("name", socket.gethostname())})
+
     async def websocket(self, request):
-        supplied = request.headers.get("Authorization", "")
-        expected = "Bearer " + self.config["token"]
-        if request.headers.get("Origin") or not hmac.compare_digest(supplied.encode(), expected.encode()):
+        if request.headers.get("Origin") or not self.authorized(request.headers.get("Authorization", "")):
             raise web.HTTPUnauthorized()
         ws = web.WebSocketResponse(max_msg_size=16384, heartbeat=20)
         await ws.prepare(request)
@@ -509,6 +537,7 @@ class Bridge:
 def application(bridge):
     app = web.Application(client_max_size=16384)
     app.router.add_get("/ws", bridge.websocket)
+    app.router.add_post("/pair", bridge.pair)
 
     async def health(request):
         return web.json_response({"ok": bridge.wm.ready.is_set(), "protocol": 1})
@@ -524,6 +553,7 @@ async def serve(config_path, diagnostics=None):
     monitor = Path(config["monitor_path"])
     wm = KWin(monitor)
     bridge = Bridge(config, wm, diagnostics=diagnostics)
+    bridge.pairing = Pairing(Path(config_path).parent / "clients.json", changed=bridge.diagnostics.changed)
     wm.recorder = bridge.diagnostics
     notification = None
 
@@ -546,8 +576,10 @@ async def serve(config_path, diagnostics=None):
         bridge.diagnostics.started(config.get("port", 8765))
         # A second, read-only interface on the name the KWin receiver already owns.
         status = StatusInterface(lambda: json.dumps(bridge.status()))
-        wm.bus.export("/org/bigscreen/Bridge", status)
+        wm.bus.export(STATUS_PATH, status)
+        wm.bus.export(STATUS_PATH, PairingInterface(bridge.pairing.start))
         bridge.diagnostics.listeners.append(StatusSignal(status.StatusChanged))
+        bridge.pairing.refresh()   # keep a code on screen while nothing has paired
         bridge.couchside = CouchsideHook(wm.bus, config.get("couchside_control", False))
         bridge.stremio = StremioHook(wm.bus, config.get("stremio_control", False))
         bridge.flimmer = FlimmerHook(wm.bus, config.get("flimmer_control", False))

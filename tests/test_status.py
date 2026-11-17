@@ -19,7 +19,7 @@ async def test_diagnostics_command_over_websocket(bridge, recorder):
         reply = await ws.receive_json()
         assert reply["ok"] and reply["id"] == "d1"
         assert set(reply["result"]) == {"schema", "generated_at", "service", "websocket", "discovery", "mqtt",
-                                        "kwin", "hooks", "mpris", "commands", "warnings"}
+                                        "kwin", "pairing", "hooks", "mpris", "commands", "warnings"}
         assert reply["result"]["websocket"]["clients"] == 1
         await ws.send_json({"id": "d2", "command": "diagnostics", "app": "stremio"})
         reply = await ws.receive_json()
@@ -66,7 +66,7 @@ async def test_status_interface_is_read_only_and_signals_without_data(bridge, re
     assert not introspection.properties
     status_method = StatusInterface._get_methods(status)[0]   # what the bus invokes for a call
     data = json.loads(status_method.fn(status))
-    assert set(data) == {"snapshot", "diagnostics"} and data["snapshot"] == b.snapshot()
+    assert set(data) == {"snapshot", "diagnostics", "pairing"} and data["snapshot"] == b.snapshot()
     assert "a" * 48 not in json.dumps(data)
     status.StatusChanged()
     assert bus.signals == [(INTERFACE, "StatusChanged", "", [])]

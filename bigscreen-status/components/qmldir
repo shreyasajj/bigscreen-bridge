@@ -8,3 +8,4 @@ AppSection 1.0 AppSection.qml
 MprisSection 1.0 MprisSection.qml
 CommandsSection 1.0 CommandsSection.qml
 WarningsSection 1.0 WarningsSection.qml
+PairingSection 1.0 PairingSection.qml

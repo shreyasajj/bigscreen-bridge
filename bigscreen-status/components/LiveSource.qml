@@ -46,6 +46,14 @@ Item {
             })
     }
 
+    // The one write: ask for a new pairing code, then show it.
+    function startPairing() {
+        DBus.SessionBus.asyncCall({service: service, path: objectPath, iface: "org.bigscreen.Bridge.Pairing",
+                                   member: "StartPairing", arguments: []},
+            reply => coalesce.restart(),
+            reply => source.failed(reply && reply.error && reply.error.name ? reply.error.name : "No reply"))
+    }
+
     function finish() {
         busy = false
         if (again) { again = false; coalesce.restart() }

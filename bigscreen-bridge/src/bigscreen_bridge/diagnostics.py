@@ -402,6 +402,9 @@ class Recorder:
             "mqtt": dict(self.mqtt),
             "kwin": {"ready": ready, "windows": len(bridge.wm.windows), **self.kwin},
             "hooks": hooks,
+            "pairing": (bridge.pairing.summary() if getattr(bridge, "pairing", None) else
+                        {"active": False, "reason": None, "paired_clients": 0, "last_paired_at": None,
+                         "last_paired_name": None}),
             "mpris": self._mpris(bridge),
             "commands": [{k: v for k, v in entry.items() if not k.startswith("_")} for entry in self.commands],
             "warnings": [dict(row) for row in self.handler.rows.values()],

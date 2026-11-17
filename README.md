@@ -59,6 +59,21 @@ Installer preserves existing config and restarts the user service on upgrades.
 The service starts with the graphical session. User lingering alone cannot provide
 a working KWin session before login.
 
+### Pairing
+
+Open **Bridge Status** from the Bigscreen launcher (install it with
+`bigscreen-status/launch.sh install`). Until a client has paired, its Pairing card
+shows a code such as `7KQ4-MXD2`; type it into Home Assistant. The code lasts five
+minutes, works once, and is exchanged for that client's own token (stored on the TV
+only as a hash in `~/.config/bigscreen-bridge/clients.json`). After that the code
+disappears; press OK on the Pairing card for a new one when pairing another client.
+The config file's `token` keeps working.
+
+```sh
+~/.local/share/bigscreen-bridge/venv/bin/bigscreen-bridge-clients list
+~/.local/share/bigscreen-bridge/venv/bin/bigscreen-bridge-clients revoke <id>   # takes effect at once
+```
+
 The installer binds port 8765 to LAN interfaces; restrict it to your trusted LAN.
 Bearer tokens traverse HTTP in cleartext: use TLS via a reverse proxy, a VPN, or SSH
 tunneling on untrusted networks. Change `host` to `127.0.0.1` if using a local proxy.

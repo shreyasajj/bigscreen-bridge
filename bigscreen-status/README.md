@@ -6,8 +6,9 @@ recent commands and warnings.
 
 It reads the running bridge's `Status()` on the session bus
 (`org.bigscreen.Bridge.Status`, see [docs/protocol.md](../docs/protocol.md)). That needs no
-token and cannot change anything: the interface has one read method and one
-signal. Nothing on this screen changes the TV, the apps or the bridge.
+token: the interface has one read method and one signal. The only thing the screen
+can change is the pairing code (OK on the Pairing card); nothing changes the apps,
+the display or the bridge's settings.
 
 ## Run it
 
@@ -42,6 +43,11 @@ The bridge service is never touched.
 | Back | close the sources panel, then close the screen |
 | ◀ ▶ | previous / next scenario (fixture mode only; nothing in live mode) |
 
+On the **Pairing** card OK asks the bridge for a new pairing code instead
+(`org.bigscreen.Bridge.Pairing.StartPairing()`). That is the screen's only write; it
+cannot pair anything by itself. The code shows in large type with a countdown and
+disappears once a client has used it. In fixture mode the card is read-only.
+
 ### Live mode
 
 `components/LiveSource.qml` calls `Status()` through
@@ -74,6 +80,7 @@ QML read the JSON.
 | `mqtt_down.json` | MQTT broker unreachable; the link retries every 5 s. |
 | `ha_disconnected.json` | No WebSocket clients for three minutes (heartbeat timeout). |
 | `command_burst.json` | Nine failed commands in 15 s; the bridge logged the burst at the fifth. |
+| `unpaired.json` | Nothing has paired yet, so the Pairing card shows a code. |
 
 `fixtures/index.json` sets the order, titles and one-line summaries.
 

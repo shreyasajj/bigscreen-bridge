@@ -281,11 +281,11 @@ second interface beside the KWin receiver on its own name:
 | Name | `org.bigscreen.Bridge` |
 | Path | `/org/bigscreen/Bridge` |
 | Interface | `org.bigscreen.Bridge.Status` |
-| `Status() → s` | JSON `{"snapshot": <the state snapshot>, "diagnostics": <as above>}` |
+| `Status() → s` | JSON `{"snapshot": <the state snapshot>, "diagnostics": <as above>, "pairing": <code or null, see Pairing>}` |
 | `StatusChanged()` | no arguments; sent when either changes, at most about twice a second |
 
 It has no other methods or properties and nothing on it can change the TV, the apps
-or the bridge. Listen for `StatusChanged` and re-read `Status()`; also re-read now
+or the bridge. (Asking for a new pairing code is a separate interface; see Pairing.) Listen for `StatusChanged` and re-read `Status()`; also re-read now
 and then, because a signal can be missed while the bridge restarts. The session bus
 is private to the logged-in user, who can already read the bridge's config and
 token, so this does not widen access. The older `org.bigscreen.Bridge` interface at
@@ -294,3 +294,29 @@ the same path is the KWin script callback and is not meant for clients.
 ```sh
 busctl --user call org.bigscreen.Bridge /org/bigscreen/Bridge org.bigscreen.Bridge.Status Status
 ```
+
+## Pairing
+
+`POST /pair` with `{"code": "7KQ4-MXD2", "name": "Home Assistant"}` exchanges the code
+shown on the TV for a new bearer token for that client:
+`{"ok": true, "token": "...", "device_id": "...", "name": "..."}`. Spaces, dashes
+and case in the code are ignored. Errors are `{"ok": false, "error": {"code",
+"message"}}` with HTTP 400 `invalid_request` (also for any browser `Origin`), 403
+`invalid_code` (wrong, used or expired), 409 `too_many_clients` (32), 429
+`rate_limited` (more than 20 attempts a minute), or 404 when pairing is not enabled.
+
+- Codes are 8 characters from `23456789ABCDEFGHJKMNPQRSTVWXYZ`, last 5 minutes, work
+  once, and are withdrawn after 5 wrong attempts.
+- While no client has paired, a code is always available (`reason: "unpaired"`);
+  afterwards only on request (`reason: "requested"`).
+- Each client gets its own token; only its SHA-256 hash is stored, in
+  `clients.json` (mode 0600) beside the config. The WebSocket accepts these tokens
+  and the config's `token`. `bigscreen-bridge-clients revoke <id>` removes one, and
+  the running bridge stops accepting it at once.
+- The code is only ever in `Status()` (key `pairing`, `{"code", "reason",
+  "expires_at"}` or `null`). It is never in the WebSocket, diagnostics, MQTT or the
+  journal. Diagnostics carry `pairing: {"active", "reason", "paired_clients",
+  "last_paired_at", "last_paired_name"}`.
+- `org.bigscreen.Bridge.Pairing.StartPairing()` at `/org/bigscreen/Bridge` asks for a
+  new code; it is the only session-bus method that changes anything, and it cannot
+  pair by itself: the code still has to be typed into the client.

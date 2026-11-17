@@ -42,6 +42,12 @@
     "file": "ha_disconnected.json"
   },
   {
+    "id": "unpaired",
+    "title": "Waiting to pair",
+    "summary": "Nothing has paired yet, so the TV shows a pairing code for Home Assistant.",
+    "file": "unpaired.json"
+  },
+  {
     "id": "command_burst",
     "title": "Burst of failed commands",
     "summary": "An automation fired a run of invalid or unanswerable requests.",

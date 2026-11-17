@@ -380,6 +380,13 @@
         "last_error": null
       }
     },
+    "pairing": {
+      "active": false,
+      "reason": null,
+      "paired_clients": 1,
+      "last_paired_at": "2026-11-16T09:00:00.000Z",
+      "last_paired_name": "Home Assistant"
+    },
     "mpris": [
       {
         "bus_name": "org.mpris.MediaPlayer2.Sendspin",
@@ -448,12 +455,13 @@
     ],
     "warnings": [
       {
-        "at": "2026-11-17T18:46:01.545Z",
+        "at": "2026-11-17T19:14:50.498Z",
         "level": "INFO",
         "logger": "bigscreen_bridge.diagnostics",
         "message": "Stremio has not emitted StateChanged; polling every 2 s",
         "count": 1
       }
     ]
-  }
+  },
+  "pairing": null
 }
