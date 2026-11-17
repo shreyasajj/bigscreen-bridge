@@ -78,7 +78,9 @@ Card {
                         ({never_signalled: "never signalled · ", not_ready: "not ready · ", not_running: "not running · "}[root.hook.poll_reason] || "")
                         + "signal " + Ui.ago(root.hook.last_signal_at)
                         + "  ·  read " + Ui.ago(root.hook.last_read_at)
-                        + (root.hook.last_read_ok === false && root.hook.consecutive_failures ? " (failed ×" + root.hook.consecutive_failures + ")" : "")
+                        // A closed app fails every poll; only count failures of one that should answer.
+                        + (root.hook.last_read_ok === false && root.hook.consecutive_failures
+                           && root.hook.poll_reason !== "not_running" ? " (failed ×" + root.hook.consecutive_failures + ")" : "")
                 }
             }
 
@@ -98,7 +100,10 @@ Card {
                 QQC2.Label {
                     font.pixelSize: Ui.small
                     color: Kirigami.Theme.disabledTextColor
-                    text: root.hook && root.hook.last_error ? Ui.ago(root.hook.last_error.at) : "none"
+                    text: root.hook && root.hook.last_error
+                          ? Ui.ago(root.hook.last_error.at) + "  ·  " + root.hook.last_error.message : "none"
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
                 }
             }
         }

@@ -12,7 +12,7 @@ Card {
     heading: "Recent commands"
     headingDetail: rows.length ? rows.length + " shown · " + failures + " failed" : ""
     sources: "<b>Diagnostics only:</b> commands[] — id, command, app, transport, started_at, finished_at, ok, error_code, "
-           + "duration_ms. Nothing records this today; content IDs and URIs are deliberately not logged."
+           + "duration_ms. The last 50 requests from Bridge.handle(); content IDs, URIs and search text are never kept."
 
     QQC2.Label {
         visible: root.rows.length === 0

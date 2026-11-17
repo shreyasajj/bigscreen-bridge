@@ -10,8 +10,8 @@ Card {
 
     heading: "Recent warnings"
     headingDetail: rows.length ? "" : "none"
-    sources: "<b>Diagnostics only:</b> warnings[] — at, level, logger, message, count. Today these exist only in the "
-           + "journal (journalctl --user -u bigscreen-bridge)."
+    sources: "<b>Diagnostics only:</b> warnings[] — at, level, logger, message, count. The last 50 distinct "
+           + "bigscreen_bridge log lines at INFO and above; the full journal is journalctl --user -u bigscreen-bridge."
 
     QQC2.Label {
         visible: root.rows.length === 0

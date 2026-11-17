@@ -1,5 +1,7 @@
-// Bridge status — a read-only mock for Plasma Bigscreen, fed from fixtures/*.json.
-// Remote: ◀ ▶ scenario · ▲ ▼ move · OK show data sources · Back close.
+// Bridge status: a read-only 10-foot screen for Plasma Bigscreen.
+// Live (default): reads org.bigscreen.Bridge.Status on the session bus.
+// Fixtures:       `-- --fixtures [scenario[:card[:sources]]]` reads fixtures/*.json instead.
+// Remote: ▲ ▼ move · OK show data sources · Back close · ◀ ▶ scenario (fixtures only).
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Window
@@ -9,13 +11,19 @@ import "components"
 
 QQC2.ApplicationWindow {
     id: window
-    title: "Bridge status (mock)"
+    title: "Bridge status"
     visible: true
     visibility: Window.FullScreen
     width: 1920
     height: 1080
     color: Kirigami.Theme.backgroundColor
 
+    // Everything after `--` on the qml6 command line is ours; decided before anything loads.
+    readonly property var ourArgs: {
+        const args = Qt.application.arguments
+        return args.indexOf("--") >= 0 ? args.slice(args.indexOf("--") + 1) : []
+    }
+    readonly property bool live: ourArgs[0] !== "--fixtures"
     property var scenarios: []
     property int current: 0
     property real loadedAt: Date.now()
@@ -23,13 +31,15 @@ QQC2.ApplicationWindow {
     property string loadError: ""
     property int startCard: 0
     property bool startSources: false
+    // Live only: "connecting" until the first answer, then "live" or "unreachable".
+    property string link: "connecting"
+    property real lastReadMs: 0
 
     // Started from a systemd unit, the window has no activation token; ask KWin for focus
-    // so the remote's keys reach the mock rather than the app underneath.
+    // so the remote's keys reach this window rather than the app underneath.
     onVisibleChanged: if (visible) requestActivate()
-    onActiveChanged: console.info("mock window active:", active)
 
-    readonly property var sections: [
+    readonly property var allSections: [
         {file: "OverviewSection.qml"},
         {file: "AppSection.qml", app: "couchside"},
         {file: "AppSection.qml", app: "stremio"},
@@ -39,10 +49,21 @@ QQC2.ApplicationWindow {
         {file: "CommandsSection.qml"},
         {file: "WarningsSection.qml"}
     ]
+    // Without a bridge there is nothing current to show beyond the Bridge card.
+    readonly property var sections: Ui.offline ? allSections.slice(0, 1) : allSections
 
     Binding { target: Ui; property: "scale"; value: Math.max(0.6, window.height / 1080) }
+    Binding { target: Ui; property: "offline"; value: window.live && window.link !== "live" }
+    Binding { target: Ui; property: "link"; value: window.live ? window.link : "fixture" }
 
-    // Local files need QML_XHR_ALLOW_FILE_READ=1; the launch script sets it.
+    function show(data) {
+        generatedMs = Date.parse((data.diagnostics || {}).generated_at) || Date.now()
+        loadedAt = Date.now()
+        Ui.nowMs = generatedMs
+        Ui.fixture = data
+    }
+
+    // Fixture mode only. Local files need QML_XHR_ALLOW_FILE_READ=1; the launch script sets it.
     function readJson(name) {
         const xhr = new XMLHttpRequest()
         xhr.open("GET", Qt.resolvedUrl("fixtures/" + name), false)
@@ -53,14 +74,10 @@ QQC2.ApplicationWindow {
     }
 
     function load(i) {
-        if (!scenarios.length) return
+        if (live || !scenarios.length) return
         current = (i + scenarios.length) % scenarios.length
         try {
-            const data = readJson(scenarios[current].file)
-            generatedMs = Date.parse((data.diagnostics || {}).generated_at) || Date.now()
-            loadedAt = Date.now()
-            Ui.nowMs = generatedMs
-            Ui.fixture = data
+            show(readJson(scenarios[current].file))
             loadError = ""
         } catch (e) {
             loadError = String(e)
@@ -68,16 +85,38 @@ QQC2.ApplicationWindow {
     }
 
     Component.onCompleted: {
+        const ours = ourArgs
+        const view = String((live ? ours[0] : ours[1]) || "").split(":")
+        if (live) view.unshift("")
+        startCard = Math.max(0, Math.min(allSections.length - 1, parseInt(view[1]) || 0))
+        startSources = view[2] === "sources"
+        if (live) return
         try {
             scenarios = readJson("index.json")
-            // `qml6 main.qml -- <scenario>[:<card>[:sources]]` picks the starting view (for screenshots);
-            // the remote takes over from there.
-            const wanted = String(Qt.application.arguments[Qt.application.arguments.length - 1]).split(":")
-            load(Math.max(0, scenarios.findIndex(s => s.id === wanted[0])))
-            startCard = Math.max(0, Math.min(sections.length - 1, parseInt(wanted[1]) || 0))
-            startSources = wanted[2] === "sources"
+            load(Math.max(0, scenarios.findIndex(s => s.id === view[0])))
         } catch (e) {
             loadError = String(e)
+        }
+    }
+
+    Loader {
+        active: window.live
+        source: "components/LiveSource.qml"
+        onLoaded: {
+            item.loaded.connect(status => {
+                window.link = "live"
+                Ui.linkError = ""
+                window.lastReadMs = Date.now()
+                window.loadError = ""
+                window.show(Object.assign({}, status.snapshot, {diagnostics: status.diagnostics}))
+            })
+            item.failed.connect(reason => {
+                // Never leave the last answer on screen as if it were current.
+                window.link = "unreachable"
+                window.loadError = reason
+                Ui.linkError = reason
+                Ui.fixture = ({})
+            })
         }
     }
 
@@ -87,11 +126,10 @@ QQC2.ApplicationWindow {
         running: true
         onTriggered: {
             window.requestActivate()
-            list.currentIndex = window.startCard
-            list.positionViewAtIndex(window.startCard, ListView.Contain)
+            list.currentIndex = Math.min(window.startCard, list.count - 1)
+            list.positionViewAtIndex(list.currentIndex, ListView.Contain)
             if (window.startSources && list.currentItem && list.currentItem.item)
                 list.currentItem.item.expanded = true
-            console.info("active:", window.active, "focus:", window.activeFocusItem)
         }
     }
 
@@ -99,7 +137,10 @@ QQC2.ApplicationWindow {
         interval: 500
         running: true
         repeat: true
-        onTriggered: Ui.nowMs = window.generatedMs + (Date.now() - window.loadedAt)
+        onTriggered: {
+            Ui.nowMs = window.generatedMs + (Date.now() - window.loadedAt)
+            Ui.wallMs = Date.now()
+        }
     }
 
     FocusScope {
@@ -116,7 +157,7 @@ QQC2.ApplicationWindow {
             case Qt.Key_Escape:
             case Qt.Key_Back:
             case Qt.Key_Backspace: {
-                // Back first folds an open "data sources" panel, then closes the mock.
+                // Back first folds an open "data sources" panel, then closes the screen.
                 const card = list.currentItem && list.currentItem.item
                 if (card && card.expanded) card.expanded = false
                 else Qt.quit()
@@ -134,7 +175,7 @@ QQC2.ApplicationWindow {
             anchors.bottomMargin: Ui.pad
             spacing: Ui.gap
 
-            // Header: title, device, scenario switcher.
+            // Header: title, device, and either the live link or the scenario switcher.
             RowLayout {
                 Layout.fillWidth: true
                 spacing: Ui.pad
@@ -147,7 +188,8 @@ QQC2.ApplicationWindow {
                         font.weight: Font.Bold
                     }
                     QQC2.Label {
-                        text: (Ui.snap.name || "") + "  ·  protocol " + (Ui.snap.protocol || "?")
+                        text: Ui.offline ? "bigscreen-bridge.service"
+                                         : (Ui.snap.name || "") + "  ·  protocol " + (Ui.snap.protocol || "?")
                         font.pixelSize: Ui.small
                         color: Kirigami.Theme.disabledTextColor
                     }
@@ -156,13 +198,35 @@ QQC2.ApplicationWindow {
                 Pill {
                     Layout.alignment: Qt.AlignTop
                     Layout.topMargin: Ui.gap
-                    text: "MOCK DATA"
-                    tone: Kirigami.Theme.neutralTextColor
+                    text: !window.live ? "MOCK DATA" : window.link === "live" ? "LIVE" : "NO BRIDGE"
+                    tone: !window.live ? Kirigami.Theme.neutralTextColor
+                        : window.link === "live" ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.negativeTextColor
                 }
 
                 Item { Layout.fillWidth: true }
 
+                // Live: when the bridge last answered.
                 ColumnLayout {
+                    visible: window.live
+                    spacing: Math.round(6 * Ui.scale)
+                    QQC2.Label {
+                        Layout.alignment: Qt.AlignRight
+                        text: window.link === "live" ? "Updated " + Ui.span((Ui.wallMs - window.lastReadMs) / 1000) + " ago"
+                            : window.link === "connecting" ? "Connecting…" : "Retrying every 10 s"
+                        font.pixelSize: Ui.heading
+                        font.weight: Font.DemiBold
+                    }
+                    QQC2.Label {
+                        Layout.alignment: Qt.AlignRight
+                        text: "org.bigscreen.Bridge.Status"
+                        font.pixelSize: Ui.small
+                        color: Kirigami.Theme.disabledTextColor
+                    }
+                }
+
+                // Fixtures: the scenario switcher.
+                ColumnLayout {
+                    visible: !window.live
                     spacing: Math.round(6 * Ui.scale)
                     RowLayout {
                         Layout.alignment: Qt.AlignRight
@@ -206,7 +270,9 @@ QQC2.ApplicationWindow {
 
             QQC2.Label {
                 Layout.fillWidth: true
-                text: window.loadError || (window.scenarios.length ? window.scenarios[window.current].summary : "")
+                visible: text !== ""
+                text: window.live ? "" : window.loadError
+                    || (window.scenarios.length ? window.scenarios[window.current].summary : "")
                 color: window.loadError ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
                 font.pixelSize: Ui.body
                 elide: Text.ElideRight
@@ -244,8 +310,8 @@ QQC2.ApplicationWindow {
                 Layout.fillWidth: true
                 spacing: Ui.pad * 1.5
                 Repeater {
-                    model: [["go-previous", "go-next", "Scenario"], ["go-up", "go-down", "Move"],
-                            ["", "", "OK  Data sources"], ["", "", "Back  Close"]]
+                    model: (window.live ? [] : [["go-previous", "go-next", "Scenario"]])
+                           .concat([["go-up", "go-down", "Move"], ["", "", "OK  Data sources"], ["", "", "Back  Close"]])
                     RowLayout {
                         required property var modelData
                         spacing: Math.round(6 * Ui.scale)
@@ -256,7 +322,8 @@ QQC2.ApplicationWindow {
                 }
                 Item { Layout.fillWidth: true }
                 QQC2.Label {
-                    text: "Read-only · fixture " + (window.scenarios.length ? window.scenarios[window.current].file : "")
+                    text: window.live ? "Read-only · session bus, no token"
+                        : "Read-only · fixture " + (window.scenarios.length ? window.scenarios[window.current].file : "")
                     font.pixelSize: Ui.small
                     color: Kirigami.Theme.disabledTextColor
                 }

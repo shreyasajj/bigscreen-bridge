@@ -20,12 +20,50 @@ Card {
     readonly property color off: Kirigami.Theme.disabledTextColor
 
     heading: "Bridge"
-    headingDetail: "bigscreen-bridge.service · " + (Ui.snap.name || "") + " · " + (Ui.snap.device_id || "").slice(0, 8)
+    headingDetail: Ui.offline ? "bigscreen-bridge.service"
+                 : "bigscreen-bridge.service · " + (Ui.snap.name || "") + " · " + (Ui.snap.device_id || "").slice(0, 8)
     sources: "<b>Snapshot:</b> available, active_app, power.display, audio.volume, audio.muted<br>"
            + "<b>Diagnostics:</b> service.started_at, service.health, websocket.clients, websocket.last_disconnected_at, "
            + "discovery.announced, mqtt.connected, mqtt.last_error, kwin.windows"
 
+    // Live mode without an answer: say so instead of showing anything stale.
+    RowLayout {
+        Layout.fillWidth: true
+        visible: Ui.offline
+        spacing: Ui.pad
+        Kirigami.Icon {
+            source: Ui.link === "connecting" ? "view-refresh" : "dialog-error"
+            implicitWidth: Math.round(72 * Ui.scale)
+            implicitHeight: implicitWidth
+            color: Ui.link === "connecting" ? root.off : root.bad
+            isMask: true
+        }
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: Math.round(4 * Ui.scale)
+            QQC2.Label {
+                text: Ui.link === "connecting" ? "Connecting to the bridge…"
+                    : Ui.outdated ? "Bridge has no Status interface" : "Bridge not running"
+                font.pixelSize: Ui.heading
+                font.weight: Font.DemiBold
+                color: Ui.link === "connecting" ? Kirigami.Theme.textColor : root.bad
+            }
+            QQC2.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: (Ui.outdated
+                       ? "org.bigscreen.Bridge is running but is older than this screen; install the current bridge. "
+                       : "org.bigscreen.Bridge did not answer on the session bus. ")
+                    + "Retrying every 10 s, and at once when it starts. Check: systemctl --user status bigscreen-bridge"
+                    + (Ui.linkError ? "  (" + Ui.linkError + ")" : "")
+                font.pixelSize: Ui.small
+                color: Kirigami.Theme.disabledTextColor
+            }
+        }
+    }
+
     GridLayout {
+        visible: !Ui.offline
         Layout.fillWidth: true
         columns: 6
         columnSpacing: Ui.gap
@@ -88,7 +126,7 @@ Card {
                 Layout.fillWidth: true
                 Layout.topMargin: Math.round(4 * Ui.scale)
                 visible: root.audio.available === true
-                value: root.audio.volume
+                value: root.audio.volume || 0
                 tone: root.audio.muted ? root.off : Kirigami.Theme.highlightColor
             }
         }

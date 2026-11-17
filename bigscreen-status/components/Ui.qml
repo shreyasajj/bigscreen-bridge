@@ -1,4 +1,4 @@
-// Shared sizes, the loaded fixture and the mock clock.
+// Shared sizes, the current data (live or fixture) and the screen's clock.
 pragma Singleton
 import QtQuick
 
@@ -13,13 +13,21 @@ QtObject {
     readonly property int gap: Math.round(16 * scale)
     readonly property int focusWidth: Math.max(3, Math.round(5 * scale))
 
-    // The current fixture: Bridge.snapshot() plus the invented "diagnostics" key.
+    // Bridge.snapshot() with the bridge's diagnostics under "diagnostics", from Status() or a fixture.
     property var fixture: ({})
     readonly property var snap: fixture
     readonly property var diag: fixture.diagnostics || ({})
 
-    // Fixture time advanced by real seconds since it was loaded, so ages tick.
+    // "live", "connecting", "unreachable" or "fixture"; offline hides everything but the Bridge card.
+    property string link: "fixture"
+    property bool offline: false
+    property string linkError: ""     // the D-Bus error name of the last failed read
+    // The name answers but the Status interface is missing: an older bridge is running.
+    readonly property bool outdated: /UnknownInterface|UnknownMethod|UnknownObject/.test(linkError)
+
+    // The data's own generated_at advanced by real seconds since it arrived, so ages tick.
     property real nowMs: 0
+    property real wallMs: Date.now()
 
     readonly property var appNames: ({couchside: "Couchside", stremio: "Stremio TV",
                                       flimmer: "Flimmer", vacuumtube: "VacuumTube"})

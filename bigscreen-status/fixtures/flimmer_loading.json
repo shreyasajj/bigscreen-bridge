@@ -3,7 +3,7 @@
   "protocol": 1,
   "device_id": "3f2c9a1e-7b4d-4c55-9a0e-5d2f6b8c1a90",
   "name": "Living Room TV",
-  "active_app": "vacuumtube",
+  "active_app": "flimmer",
   "available": true,
   "apps": [
     {
@@ -68,17 +68,21 @@
       "id": "flimmer",
       "name": "Flimmer",
       "installed": true,
-      "running": false,
+      "running": true,
       "capabilities": [
         "focus"
       ],
-      "state": "off",
+      "state": "idle",
       "content_types": [
         "flimmer_channel"
       ],
       "browse": true,
       "hook_installed": true,
-      "control_available": false
+      "control_available": true,
+      "media": {
+        "state": "idle",
+        "updated_at": "2026-11-17T16:41:59.600Z"
+      }
     },
     {
       "id": "vacuumtube",
@@ -86,9 +90,14 @@
       "installed": true,
       "running": true,
       "capabilities": [
-        "focus"
+        "focus",
+        "play",
+        "stop",
+        "seek",
+        "volume_set",
+        "volume_mute"
       ],
-      "state": "idle",
+      "state": "paused",
       "content_types": [
         "youtube_video",
         "youtube_playlist",
@@ -96,7 +105,26 @@
       ],
       "browse": false,
       "hook_installed": true,
-      "control_available": false
+      "control_available": true,
+      "media": {
+        "video_id": "M7lc1UVf-VE",
+        "title": "YouTube Developers Live: Embedded Web Player Customization",
+        "state": "paused",
+        "position": 312.4,
+        "duration": 1287,
+        "updated_at": "2026-11-17T16:41:59.200Z",
+        "thumbnail": "https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg",
+        "volume": 0.8,
+        "muted": false,
+        "output_volume": 0.8,
+        "content_id": "M7lc1UVf-VE",
+        "type": "video",
+        "poster": "https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg"
+      },
+      "view": {
+        "kind": "watch",
+        "video_id": "M7lc1UVf-VE"
+      }
     }
   ],
   "power": {
@@ -195,6 +223,47 @@
       "role": "video"
     },
     {
+      "id": "app:flimmer",
+      "app": "flimmer",
+      "state": "idle",
+      "media": {
+        "state": "idle",
+        "updated_at": "2026-11-17T16:41:59.600Z"
+      },
+      "capabilities": [],
+      "available": true,
+      "role": "video"
+    },
+    {
+      "id": "app:vacuumtube",
+      "app": "vacuumtube",
+      "state": "paused",
+      "media": {
+        "video_id": "M7lc1UVf-VE",
+        "title": "YouTube Developers Live: Embedded Web Player Customization",
+        "state": "paused",
+        "position": 312.4,
+        "duration": 1287,
+        "updated_at": "2026-11-17T16:41:59.200Z",
+        "thumbnail": "https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg",
+        "volume": 0.8,
+        "muted": false,
+        "output_volume": 0.8,
+        "content_id": "M7lc1UVf-VE",
+        "type": "video",
+        "poster": "https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg"
+      },
+      "capabilities": [
+        "play",
+        "stop",
+        "seek",
+        "volume_set",
+        "volume_mute"
+      ],
+      "available": true,
+      "role": "video"
+    },
+    {
       "id": "mpris::1.41",
       "bus_name": "org.mpris.MediaPlayer2.Sendspin",
       "owner": ":1.41",
@@ -212,28 +281,6 @@
         "position": 96.0,
         "duration": 302.0
       }
-    },
-    {
-      "id": "mpris::1.77",
-      "bus_name": "org.mpris.MediaPlayer2.chromium.instance5120",
-      "owner": ":1.77",
-      "pid": 5120,
-      "app": "vacuumtube",
-      "name": "Chromium",
-      "desktop": "",
-      "state": "playing",
-      "available": true,
-      "role": "other",
-      "capabilities": [
-        "pause",
-        "stop"
-      ],
-      "media": {
-        "title": "YouTube Developers Live: Embedded Web Player Customization",
-        "content_id": "99321d4a0b92aa98acb495e3cf8f0864ac898fbde0a11a4f0470d68fb2c1b0ba",
-        "position": 312.4,
-        "duration": 1287.0
-      }
     }
   ],
   "paused_by_bridge": [],
@@ -243,8 +290,8 @@
     "service": {
       "version": "0.1.0",
       "started_at": "2026-11-17T06:33:00.000Z",
-      "health": "ok",
-      "port": 8765
+      "port": 8765,
+      "health": "ok"
     },
     "websocket": {
       "clients": 1,
@@ -255,9 +302,9 @@
     "discovery": {
       "enabled": true,
       "announced": true,
+      "error": null,
       "service_type": "_bigscreen-bridge._tcp",
-      "instance": "Living Room TV (3f2c9a1e)",
-      "error": null
+      "instance": "Living Room TV (3f2c9a1e)"
     },
     "mqtt": {
       "configured": true,
@@ -267,13 +314,13 @@
       "commands_enabled": false,
       "last_connected_at": "2026-11-17T06:33:20.000Z",
       "last_error": null,
-      "retry_seconds": 5,
-      "failures": 0
+      "failures": 0,
+      "retry_seconds": 5
     },
     "kwin": {
       "ready": true,
-      "windows": 3,
-      "last_report_at": "2026-11-17T16:41:18.000Z"
+      "windows": 4,
+      "last_report_at": "2026-11-17T16:41:52.400Z"
     },
     "hooks": {
       "couchside": {
@@ -313,42 +360,40 @@
         "transport": "dbus",
         "endpoint": "io.github.jclsn.Flimmer.Control",
         "enabled": true,
-        "reachable": false,
-        "ready": false,
-        "mode": "polled",
-        "poll_reason": "not_running",
+        "reachable": true,
+        "ready": true,
+        "mode": "pushed",
+        "poll_reason": null,
         "signal_source": "StateChanged",
-        "signals_received": 0,
-        "last_signal_at": null,
-        "last_read_at": "2026-11-17T16:41:54.000Z",
-        "last_read_ok": false,
+        "signals_received": 2,
+        "last_signal_at": "2026-11-17T16:41:52.900Z",
+        "last_read_at": "2026-11-17T16:41:59.600Z",
+        "last_read_ok": true,
         "consecutive_failures": 0,
         "last_error": {
           "code": "not_ready",
           "message": "Flimmer control endpoint is unavailable",
           "at": "2026-11-17T16:41:54.000Z"
         },
-        "catalogue_loading": false
+        "catalogue_loading": true,
+        "catalogue_loading_since": "2026-11-17T16:41:54.100Z",
+        "channels": null
       },
       "vacuumtube": {
         "transport": "socket",
         "endpoint": "$XDG_RUNTIME_DIR/bigscreen-bridge/vacuumtube.sock",
         "enabled": true,
-        "reachable": false,
-        "ready": false,
-        "mode": "polled",
-        "poll_reason": "not_ready",
+        "reachable": true,
+        "ready": true,
+        "mode": "pushed",
+        "poll_reason": null,
         "signal_source": "mpris",
         "signals_received": 133,
-        "last_signal_at": "2026-11-17T16:41:57.600Z",
-        "last_read_at": "2026-11-17T16:41:59.100Z",
-        "last_read_ok": false,
-        "consecutive_failures": 37,
-        "last_error": {
-          "code": "not_ready",
-          "message": "VacuumTube control endpoint is unavailable",
-          "at": "2026-11-17T16:41:59.100Z"
-        }
+        "last_signal_at": "2026-11-17T16:41:52.500Z",
+        "last_read_at": "2026-11-17T16:41:53.700Z",
+        "last_read_ok": true,
+        "consecutive_failures": 0,
+        "last_error": null
       }
     },
     "mpris": [
@@ -366,14 +411,14 @@
         "identity": "Chromium",
         "desktop": null,
         "app": "vacuumtube",
-        "state": "playing",
+        "state": "paused",
         "role": "other",
-        "superseded_by": null
+        "superseded_by": "app:vacuumtube"
       }
     ],
     "commands": [
       {
-        "id": "a41f0c2e-9a7d-4d4e-8e8f-1c0b8a5f3e11",
+        "id": "92043bae-64f7-5fc9-af09-60b2235a45ba",
         "command": "pause",
         "app": "vacuumtube",
         "transport": "websocket",
@@ -384,7 +429,7 @@
         "duration_ms": 380
       },
       {
-        "id": "7c2e9b10-3f5a-4b8c-a1d2-e3f4a5b6c7d8",
+        "id": "292d545e-ff87-5d63-8c85-b67992751209",
         "command": "open",
         "app": "stremio",
         "transport": "websocket",
@@ -395,36 +440,50 @@
         "duration_ms": 2140
       },
       {
-        "id": "9d8c7b6a-5f4e-4d3c-b2a1-0f9e8d7c6b5a",
-        "command": "open",
-        "app": "vacuumtube",
+        "id": "9216f280-3953-520f-a538-541908cd9e5a",
+        "command": "set_volume",
+        "app": null,
         "transport": "websocket",
-        "started_at": "2026-11-17T16:40:48.000Z",
-        "finished_at": "2026-11-17T16:41:08.000Z",
-        "ok": false,
-        "error_code": "readiness_timeout",
-        "duration_ms": 20000
+        "started_at": "2026-11-17T16:39:59.905Z",
+        "finished_at": "2026-11-17T16:40:00.000Z",
+        "ok": true,
+        "error_code": null,
+        "duration_ms": 95
       },
       {
-        "id": "8e7d6c5b-4a39-4281-9706-f5e4d3c2b1a0",
+        "id": "48a9ed41-7fea-5240-bf19-f04953572968",
         "command": "pause",
-        "app": "vacuumtube",
+        "app": "stremio",
         "transport": "websocket",
-        "started_at": "2026-11-17T16:41:45.994Z",
-        "finished_at": "2026-11-17T16:41:46.000Z",
-        "ok": false,
-        "error_code": "not_ready",
-        "duration_ms": 6
+        "started_at": "2026-11-17T16:41:49.990Z",
+        "finished_at": "2026-11-17T16:41:50.400Z",
+        "ok": true,
+        "error_code": null,
+        "duration_ms": 410
+      },
+      {
+        "id": "ebad4acf-47fa-573a-8a15-cdaf9bfce68e",
+        "command": "focus",
+        "app": "flimmer",
+        "transport": "websocket",
+        "started_at": "2026-11-17T16:41:50.570Z",
+        "finished_at": "2026-11-17T16:41:52.400Z",
+        "ok": true,
+        "error_code": null,
+        "duration_ms": 1830
+      },
+      {
+        "id": "76520acb-11da-520c-a640-f7b0bff86bfc",
+        "command": "open",
+        "app": "flimmer",
+        "transport": "websocket",
+        "started_at": "2026-11-17T16:41:52.600Z",
+        "finished_at": null,
+        "ok": null,
+        "error_code": null,
+        "duration_ms": null
       }
     ],
-    "warnings": [
-      {
-        "at": "2026-11-17T16:40:46.000Z",
-        "level": "WARNING",
-        "logger": "bigscreen_bridge.hooks",
-        "message": "VacuumTube control socket unavailable (not_ready)",
-        "count": 37
-      }
-    ]
+    "warnings": []
   }
 }

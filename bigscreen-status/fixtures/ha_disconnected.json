@@ -274,21 +274,21 @@
     "service": {
       "version": "0.1.0",
       "started_at": "2026-11-17T06:33:00.000Z",
-      "health": "ok",
-      "port": 8765
+      "port": 8765,
+      "health": "ok"
     },
     "websocket": {
-      "clients": 1,
-      "last_connected_at": "2026-11-17T06:33:40.000Z",
-      "last_disconnected_at": null,
-      "last_disconnect_reason": null
+      "clients": 0,
+      "last_connected_at": "2026-11-17T12:48:40.000Z",
+      "last_disconnected_at": "2026-11-17T16:38:48.000Z",
+      "last_disconnect_reason": "heartbeat_timeout"
     },
     "discovery": {
       "enabled": true,
       "announced": true,
+      "error": null,
       "service_type": "_bigscreen-bridge._tcp",
-      "instance": "Living Room TV (3f2c9a1e)",
-      "error": null
+      "instance": "Living Room TV (3f2c9a1e)"
     },
     "mqtt": {
       "configured": true,
@@ -298,8 +298,8 @@
       "commands_enabled": false,
       "last_connected_at": "2026-11-17T06:33:20.000Z",
       "last_error": null,
-      "retry_seconds": 5,
-      "failures": 0
+      "failures": 0,
+      "retry_seconds": 5
     },
     "kwin": {
       "ready": true,
@@ -353,13 +353,15 @@
         "last_signal_at": null,
         "last_read_at": "2026-11-17T16:41:54.000Z",
         "last_read_ok": false,
-        "consecutive_failures": 0,
+        "consecutive_failures": 18255,
         "last_error": {
           "code": "not_ready",
           "message": "Flimmer control endpoint is unavailable",
           "at": "2026-11-17T16:41:54.000Z"
         },
-        "catalogue_loading": false
+        "catalogue_loading": false,
+        "catalogue_loading_since": null,
+        "channels": null
       },
       "vacuumtube": {
         "transport": "socket",
@@ -400,7 +402,7 @@
     ],
     "commands": [
       {
-        "id": "a41f0c2e-9a7d-4d4e-8e8f-1c0b8a5f3e11",
+        "id": "92043bae-64f7-5fc9-af09-60b2235a45ba",
         "command": "pause",
         "app": "vacuumtube",
         "transport": "websocket",
@@ -411,7 +413,7 @@
         "duration_ms": 380
       },
       {
-        "id": "7c2e9b10-3f5a-4b8c-a1d2-e3f4a5b6c7d8",
+        "id": "292d545e-ff87-5d63-8c85-b67992751209",
         "command": "open",
         "app": "stremio",
         "transport": "websocket",
@@ -422,7 +424,7 @@
         "duration_ms": 2140
       },
       {
-        "id": "e5d4c3b2-a190-4f8e-9d7c-6b5a4f3e2d1c",
+        "id": "9216f280-3953-520f-a538-541908cd9e5a",
         "command": "set_volume",
         "app": null,
         "transport": "websocket",
@@ -431,19 +433,16 @@
         "ok": true,
         "error_code": null,
         "duration_ms": 95
-      },
-      {
-        "id": "1b2c3d4e-5f60-4718-8293-a4b5c6d7e8f9",
-        "command": "get_state",
-        "app": null,
-        "transport": "websocket",
-        "started_at": "2026-11-17T16:41:28.996Z",
-        "finished_at": "2026-11-17T16:41:29.000Z",
-        "ok": true,
-        "error_code": null,
-        "duration_ms": 4
       }
     ],
-    "warnings": []
+    "warnings": [
+      {
+        "at": "2026-11-17T16:38:48.000Z",
+        "level": "INFO",
+        "logger": "bigscreen_bridge.server",
+        "message": "WebSocket client closed (heartbeat_timeout)",
+        "count": 1
+      }
+    ]
   }
 }
