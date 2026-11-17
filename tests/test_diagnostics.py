@@ -469,3 +469,35 @@ async def test_privacy_nothing_sensitive_reaches_diagnostics(bridge, recorder, c
     for secret in secrets:
         assert secret not in text, secret
     assert len(json.loads(text)["commands"]) == 7 and json.loads(text)["warnings"]
+
+
+async def test_failed_requests_reach_the_journal_without_their_content(bridge, recorder, caplog):
+    b, _ = bridge
+    wire(b, recorder)
+    caplog.set_level(logging.INFO, logger="bigscreen_bridge")
+    cache = OrderedDict()
+    await b.handle(json.dumps({"id": "abcdef123456", "command": "open", "app": "vacuumtube",
+                               "content_type": "search", "content_id": "secret search"}), cache)
+    b.stremio = stremio(recorder)
+    b.stremio.control = AsyncMock(side_effect=BridgeError("command_timeout", "Stremio did not acknowledge"))
+    await b.handle(json.dumps({"id": "fedcba654321", "command": "pause", "app": "stremio"}), cache, "mqtt")
+    lines = [(r.levelname, r.getMessage()) for r in caplog.records if r.getMessage().startswith("Request ")]
+    assert lines == [("INFO", "Request abcdef12 failed: open vacuumtube via websocket (unsupported)"),
+                     ("WARNING", "Request fedcba65 failed: pause stremio via mqtt (command_timeout)")]
+    assert "secret search" not in caplog.text
+
+
+async def test_a_window_without_its_control_endpoint_is_named_as_such(bridge, monkeypatch):
+    b, _ = bridge
+    b.flimmer = FlimmerHook(None, True)
+    b.flimmer.request = AsyncMock(side_effect=BridgeError("not_ready", "Flimmer control endpoint is unavailable"))
+    b.wm.windows = [{"id": "f", "desktop": FLATPAK["flimmer"]}]
+
+    async def processes(*argv):
+        return FLATPAK["flimmer"]
+    monkeypatch.setattr("bigscreen_bridge.server.process", processes)
+    b.launcher = AsyncMock()
+    monkeypatch.setattr("asyncio.timeout", lambda _: asyncio.timeouts.timeout(0.3))
+    with pytest.raises(BridgeError, match="control endpoint did not answer") as exc:
+        await b.focus("flimmer")
+    assert exc.value.code == "readiness_timeout"

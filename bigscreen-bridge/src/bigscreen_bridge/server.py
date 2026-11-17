@@ -277,6 +277,10 @@ class Bridge:
                         if need_control and (not hook.state or not hook.state.get("ready")):
                             windows = []
             except TimeoutError as exc:
+                if need_control and any(app.matches(w) for w in self.wm.windows):
+                    # The app is up, but this build (or this start) never offered its control endpoint.
+                    raise BridgeError("readiness_timeout",
+                                      "Application window appeared but its control endpoint did not answer") from exc
                 raise BridgeError("readiness_timeout", "Application did not acquire a window") from exc
         window = next((w for w in windows if w.get("active")), windows[0])
         await self.wm.focus(window["id"])
@@ -458,11 +462,23 @@ class Bridge:
         if entry is None:
             entry = self.diagnostics.command_started(request_id, data, transport)
         self.diagnostics.command_finished(entry, response, id(cache))
+        if not response["ok"]:
+            self._log_failure(entry, response)
         if request_id and request_id not in cache:
             cache[request_id] = (data, response)
             if len(cache) > 128:
                 cache.popitem(last=False)
         return response
+
+    @staticmethod
+    def _log_failure(entry, response):
+        """One journal line per failed request, from the recorder's sanitized names only."""
+        entry = entry or {}
+        code = (entry.get("error_code") or "error")
+        # A client's own mistake is routine; anything else means the TV could not do what was asked.
+        level = logging.INFO if code in ("invalid_request", "unsupported") else logging.WARNING
+        LOG.log(level, "Request %s failed: %s %s via %s (%s)", (entry.get("id") or "-")[:8],
+                entry.get("command") or "-", entry.get("app") or "system", entry.get("transport") or "-", code)
 
     async def websocket(self, request):
         supplied = request.headers.get("Authorization", "")
