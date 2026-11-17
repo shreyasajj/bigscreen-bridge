@@ -29,6 +29,7 @@ from .mqtt import MqttLink, settings as mqtt_settings
 from .deep_links import parse_uri
 from .adapters import APPS, BridgeError
 from .kwin import KWin
+from .status import StatusInterface, StatusSignal
 from .couchside import CouchsideHook, KINDS, validate_content
 from .vacuumtube import VacuumTubeHook, validate_content as validate_youtube, validate_volume
 from .flimmer import FlimmerHook, validate_channel
@@ -205,6 +206,10 @@ class Bridge:
             snapshot['paused_by_bridge'] = list(self.sessions.receipts)
         return copy.deepcopy(snapshot)
 
+    def status(self):
+        """The token-free local read: what clients are sent, plus the bridge's own diagnostics."""
+        return {"snapshot": self.snapshot(), "diagnostics": self.diagnostics.to_dict(self)}
+
     async def notify(self):
         self.diagnostics.changed()
         if self.clients:
@@ -365,6 +370,10 @@ class Bridge:
                 raise BridgeError('unsupported', 'The requested system module is unavailable')
             await self.notify()
             return result
+        if command == "diagnostics":
+            if request.keys() - {"id", "command"}:
+                raise BridgeError("invalid_request", "Unexpected command arguments")
+            return self.diagnostics.to_dict(self)
         if command not in ("get_state", "browse", "focus", "open", "open_uri", "play", "pause", "stop", "seek", "volume_set", "volume_mute"):
             raise BridgeError("unsupported", "Command is not supported")
         allowed = {"id", "command", "app"} if command == "focus" else {"id", "command"}
@@ -519,6 +528,10 @@ async def serve(config_path, diagnostics=None):
         bridge.installed = set((await process("flatpak", "list", "--app", "--columns=application")).splitlines())
         await wm.start()
         bridge.diagnostics.started(config.get("port", 8765))
+        # A second, read-only interface on the name the KWin receiver already owns.
+        status = StatusInterface(lambda: json.dumps(bridge.status()))
+        wm.bus.export("/org/bigscreen/Bridge", status)
+        bridge.diagnostics.listeners.append(StatusSignal(status.StatusChanged))
         bridge.couchside = CouchsideHook(wm.bus, config.get("couchside_control", False))
         bridge.stremio = StremioHook(wm.bus, config.get("stremio_control", False))
         bridge.flimmer = FlimmerHook(wm.bus, config.get("flimmer_control", False))

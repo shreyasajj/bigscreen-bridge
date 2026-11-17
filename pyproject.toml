@@ -36,3 +36,4 @@ select = ["E4", "E7", "E9", "F"]
 
 [tool.ruff.lint.per-file-ignores]
 "bigscreen-bridge/src/bigscreen_bridge/kwin.py" = ["F821"] # D-Bus signature annotations
+"bigscreen-bridge/src/bigscreen_bridge/status.py" = ["F821"]

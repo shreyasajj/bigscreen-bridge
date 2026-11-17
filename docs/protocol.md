@@ -222,3 +222,75 @@ connection at `$XDG_RUNTIME_DIR/bigscreen-bridge/vacuumtube.sock`, directory 070
 socket 0600, both owned by the current user. The KDE bridge verifies ownership,
 permissions and socket type before connecting. This transport is local to the
 Unix user; external HA access continues through the authenticated WebSocket API.
+
+## Diagnostics
+
+`{"id": "uuid", "command": "diagnostics"}` returns the bridge's own health record
+(`bigscreen_bridge/diagnostics.py`). It takes no arguments (any other key is
+`invalid_request`) and changes nothing. It is not part of the pushed `state`
+snapshot or the MQTT `state` topic, so entities do not change on every request or
+log line. Times are UTC ISO 8601 with milliseconds and `Z`; compute ages against
+`generated_at`, not the client's clock.
+
+```json
+{"schema": 1, "generated_at": "…Z",
+ "service":   {"version", "started_at", "port", "health": "ok" | "degraded"},
+ "websocket": {"clients", "last_connected_at", "last_disconnected_at", "last_disconnect_reason"},
+ "discovery": {"enabled", "announced", "error", "service_type", "instance"},
+ "mqtt":      {"configured", "connected", "broker": "host:port", "tls", "commands_enabled",
+               "last_connected_at", "last_error", "failures", "retry_seconds"},
+ "kwin":      {"ready", "windows", "last_report_at"},
+ "hooks": {"<app>": {"transport": "dbus" | "socket", "endpoint", "enabled", "reachable", "ready",
+                     "mode": "pushed" | "polled", "poll_reason", "signal_source", "signals_received",
+                     "last_signal_at", "last_read_at", "last_read_ok", "consecutive_failures",
+                     "last_error": {"code", "message", "at"} | null}},
+ "mpris":    [{"bus_name", "identity", "desktop", "app", "state", "role", "superseded_by"}],
+ "commands": [{"id", "command", "app", "transport", "started_at", "finished_at", "ok",
+               "error_code", "duration_ms"}],
+ "warnings": [{"at", "level", "logger", "message", "count"}]}
+```
+
+- `last_disconnect_reason`: `normal`, `heartbeat_timeout`, `send_timeout`,
+  `connection_lost` or `unexpected_message` (a non-text frame).
+- `mqtt.last_error` is the exception class name; `failures` counts attempts since
+  the last successful connection.
+- `poll_reason` (only while `mode` is `polled`): `not_running` (no endpoint, no
+  window), `never_signalled`, or `not_ready` (VacuumTube is polled until Leanback
+  is ready). `signal_source` is `StateChanged` or `mpris`.
+- Couchside adds `music_assistant_ready`; Flimmer adds `catalogue_loading`,
+  `catalogue_loading_since` and `channels` (the last `list_channels` total, `null`
+  until a page was listed).
+- `commands` keeps the last 50 requests from every transport; a retry answered from
+  the cache is not listed again, and a request still running has `ok: null`.
+  `command` and `app` are only known names (otherwise `unknown`).
+- `warnings` keeps the last 50 distinct `bigscreen_bridge.*` log messages at INFO
+  and above, with repeats folded into `count`.
+
+Never included: the token, MQTT credentials, content IDs, URIs, search text, volume
+levels, window captions or application payloads. Error messages are the bridge's
+own fixed strings; when an app reports an error only its code is kept (or `error`
+if the code is not a plain identifier), with the message "`<App>` reported an error".
+
+## Local read-only status (session bus)
+
+For screens on the TV itself, which should not need the token, the bridge exports a
+second interface beside the KWin receiver on its own name:
+
+| | |
+| --- | --- |
+| Name | `org.bigscreen.Bridge` |
+| Path | `/org/bigscreen/Bridge` |
+| Interface | `org.bigscreen.Bridge.Status` |
+| `Status() → s` | JSON `{"snapshot": <the state snapshot>, "diagnostics": <as above>}` |
+| `StatusChanged()` | no arguments; sent when either changes, at most about twice a second |
+
+It has no other methods or properties and nothing on it can change the TV, the apps
+or the bridge. Listen for `StatusChanged` and re-read `Status()`; also re-read now
+and then, because a signal can be missed while the bridge restarts. The session bus
+is private to the logged-in user, who can already read the bridge's config and
+token, so this does not widen access. The older `org.bigscreen.Bridge` interface at
+the same path is the KWin script callback and is not meant for clients.
+
+```sh
+busctl --user call org.bigscreen.Bridge /org/bigscreen/Bridge org.bigscreen.Bridge.Status Status
+```

@@ -463,7 +463,8 @@ async def test_privacy_nothing_sensitive_reaches_diagnostics(bridge, recorder, c
         await task
     # Even a line that quotes the token or the MQTT password directly is scrubbed.
     logging.getLogger("bigscreen_bridge.server").warning("leak %s %s", "a" * 48, "hunter2-secret")
-    text = json.dumps(recorder.to_dict(b))
+    del b.execute   # read back through the real command
+    text = json.dumps(await b.execute({"id": "d", "command": "diagnostics"}))
     for secret in secrets:
         assert secret not in text, secret
     assert len(json.loads(text)["commands"]) == 7 and json.loads(text)["warnings"]
