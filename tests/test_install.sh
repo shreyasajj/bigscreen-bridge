@@ -76,12 +76,12 @@ sh scripts/install-tv.sh > "$work/out.log" 2>&1 || { cat "$work/out.log"; fail "
 count=$(find "$share/venvs" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
 [ "$count" = 2 ] || fail "$count venvs kept, expected 2: $(ls "$share/venvs")"
 [ -d "$before" ] || fail "the previously linked venv was pruned"
-[ -d "$(linked)" ] && [ "$(linked)" != "$before" ] || fail "no new venv linked"
+if [ ! -d "$(linked)" ] || [ "$(linked)" = "$before" ]; then fail "no new venv linked"; fi
 
 # A re-run whose pip fails leaves the working venv linked and in place.
 before=$(linked)
 if FAIL_PIP=1 sh scripts/install-tv.sh > "$work/out.log" 2>&1; then fail "a failed pip was not reported"; fi
-[ "$(linked)" = "$before" ] && [ -d "$before" ] || fail "a failed pip broke the linked venv"
+if [ "$(linked)" != "$before" ] || [ ! -d "$before" ]; then fail "a failed pip broke the linked venv"; fi
 "$real_python" -c "import json,sys; u=json.load(open(sys.argv[1]))['update']; assert u == {'channel': 'prerelease', 'auto': False}, u" "$config" \
     || fail "a plain re-run changed the update settings"
 
