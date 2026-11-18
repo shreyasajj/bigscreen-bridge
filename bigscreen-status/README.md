@@ -12,6 +12,10 @@ the display or the bridge's settings.
 
 ## Run it
 
+The bridge installer (`install.sh` or `scripts/install-tv.sh`) installs the screen on
+the TV and adds **Bridge Status** to the launcher. `launch.sh` installs and drives it
+from a development machine over SSH.
+
 Requirements on the TV: `qml6`, Kirigami, `org.kde.bigscreen` and Plasma's own
 `org.kde.plasma.workspace.dbus` QML module (part of `plasma-workspace`). Plasma
 Bigscreen on KDE neon has all four (checked on Qt 6.11.1, plasma-workspace 6.8.2);
