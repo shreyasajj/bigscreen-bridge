@@ -17,6 +17,11 @@ if not (INTEGRATION / "custom_components/bigscreen_bridge/manifest.json").is_fil
     raise pytest.UsageError(f"Check out ha-bigscreen-bridge at {INTEGRATION} or set BIGSCREEN_INTEGRATION")
 sys.path.insert(0, str(INTEGRATION))
 
+try:  # Home Assistant fixtures, where Home Assistant can be imported (Python 3.14)
+    from ha_helpers import coordinator  # noqa: F401
+except ImportError:
+    pass
+
 
 class WindowManager:
     def __init__(self):
