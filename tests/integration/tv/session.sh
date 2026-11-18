@@ -5,8 +5,11 @@
 # Ready when $XDG_RUNTIME_DIR/tv-ready exists.
 set -eu
 rm -f "$XDG_RUNTIME_DIR/tv-ready"
+# Bigscreen's own session environment. It sources /etc/profile, which is not -u clean.
+set +u
 # shellcheck disable=SC1091
-. plasma-bigscreen-common-env || true
+. plasma-bigscreen-common-env
+set -u
 export QT_QUICK_BACKEND=software LIBGL_ALWAYS_SOFTWARE=1 KWIN_COMPOSE=Q XDG_SESSION_TYPE=wayland \
        XDG_CURRENT_DESKTOP=KDE KDE_FULL_SESSION=true WAYLAND_DISPLAY=wayland-0
 kwin_wayland --virtual --width 1920 --height 1080 --socket wayland-0 --no-lockscreen --xwayland &

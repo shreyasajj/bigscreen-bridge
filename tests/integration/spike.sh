@@ -37,7 +37,9 @@ cleanup
 docker run -d --name "$name" --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
     --tmpfs /run --tmpfs /run/lock -v "$(pwd)/dist:/opt/release:ro" "$image" >/dev/null
 wait_for 120 "user session bus" 'busctl --user status >/dev/null'
-wait_for 180 "KWin and the Bigscreen shell" "test -e /run/user/1000/tv-ready"
+wait_for 180 "KWin and the Bigscreen shell" \
+    "test -e /run/user/1000/tv-ready || { systemctl --user is-failed -q tv-session && exit 0; false; }"
+if as_tv "systemctl --user is-failed -q tv-session"; then echo "The TV session failed" >&2; exit 1; fi
 as_tv 'busctl --user list --no-pager | grep -E "org.kde.(KWin|plasmashell)"'
 
 step "install the bridge with install.sh"
