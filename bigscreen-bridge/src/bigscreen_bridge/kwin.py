@@ -1,6 +1,7 @@
 """Session-bus receiver plus narrowly scoped Plasma 6 activation scripts."""
 import asyncio
 import json
+import logging
 from pathlib import Path
 import tempfile
 import uuid
@@ -11,7 +12,11 @@ from dbus_next.constants import NameFlag, RequestNameReply
 from dbus_next.service import ServiceInterface, method
 
 from .adapters import BridgeError
+
 from .diagnostics import NULL
+
+LOG = logging.getLogger(__name__)
+MONITOR_ATTEMPTS = 3   # loads of the window monitor before the bridge gives up and restarts
 
 
 class Receiver(ServiceInterface):
@@ -81,9 +86,17 @@ class KWin:
         introspection = await self.bus.introspect("org.kde.KWin", "/Scripting")
         self.scripting = self.bus.get_proxy_object("org.kde.KWin", "/Scripting", introspection).get_interface(
             "org.kde.kwin.Scripting")
-        await self.scripting.call_unload_script(self.monitor_name)
-        await self.run(self.monitor, self.monitor_name)
-        await asyncio.wait_for(self.ready.wait(), 10)
+        for attempt in range(1, MONITOR_ATTEMPTS + 1):
+            await self.scripting.call_unload_script(self.monitor_name)
+            await self.run(self.monitor, self.monitor_name)
+            try:
+                await asyncio.wait_for(self.ready.wait(), 10)
+                return
+            except TimeoutError:
+                if attempt == MONITOR_ATTEMPTS:
+                    raise
+                LOG.warning("KWin has not reported its windows; loading the monitor again (%d of %d)",
+                            attempt + 1, MONITOR_ATTEMPTS)
 
     async def run(self, path: Path, name: str):
         # Qt exposes overloaded loadScript methods; select the two-string signature explicitly.
@@ -92,13 +105,16 @@ class KWin:
                                             signature="ss", body=[str(path), name]))
         if reply.message_type == MessageType.ERROR:
             raise RuntimeError(f"KWin loadScript failed: {reply.error_name}")
-        script_id = reply.body[0]
-        if script_id < 0:
+        if reply.body[0] < 0:
             raise RuntimeError("KWin refused script")
-        script_path = f"/Scripting/Script{script_id}"
-        intro = await self.bus.introspect("org.kde.KWin", script_path)
-        script = self.bus.get_proxy_object("org.kde.KWin", script_path, intro)
-        await script.get_interface("org.kde.kwin.Script").call_run()
+        # KWin numbers a script by how many scripts are loaded, so after an unload a new
+        # script can get the number, and the /Scripting/ScriptN path, of one still running;
+        # calling run on that path starts the wrong script. start() runs every loaded script
+        # that is not running yet, whatever its number.
+        reply = await self.bus.call(Message(destination="org.kde.KWin", path="/Scripting",
+                                            interface="org.kde.kwin.Scripting", member="start"))
+        if reply.message_type == MessageType.ERROR:
+            raise RuntimeError(f"KWin start failed: {reply.error_name}")
 
     async def refresh(self):
         request_id = str(uuid.uuid4())
