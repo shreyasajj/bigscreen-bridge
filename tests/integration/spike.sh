@@ -40,7 +40,9 @@ wait_for 120 "user session bus" 'busctl --user status >/dev/null'
 wait_for 180 "KWin and the Bigscreen shell" \
     "test -e /run/user/1000/tv-ready || { systemctl --user is-failed -q tv-session && exit 0; false; }"
 if as_tv "systemctl --user is-failed -q tv-session"; then echo "The TV session failed" >&2; exit 1; fi
-as_tv 'busctl --user list --no-pager | grep -E "org.kde.(KWin|plasmashell)"'
+sleep 10
+as_tv 'busctl --user list --no-pager | grep -E "org.kde.(KWin|plasmashell) "' \
+    || { echo "KWin or the Bigscreen shell did not stay up" >&2; exit 1; }
 
 step "install the bridge with install.sh"
 as_tv 'BIGSCREEN_RELEASES_API=file:///opt/release/releases sh /opt/release/install.sh --no-auto-update'
@@ -48,8 +50,13 @@ wait_for 60 "bridge Status on the session bus" \
     'busctl --user call org.bigscreen.Bridge /org/bigscreen/Bridge org.bigscreen.Bridge.Status Status'
 
 step "install Couchside"
-as_tv 'flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo &&
-       flatpak install --user -y --noninteractive https://shreyasajj.github.io/couchside/couchside.flatpakref'
+as_tv 'flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo'
+# GitHub Pages, which hosts the Couchside repo, sometimes answers 503; try a few times.
+for attempt in 1 2 3 4; do
+    as_tv 'flatpak install --user -y --noninteractive https://shreyasajj.github.io/couchside/couchside.flatpakref' && break
+    [ "$attempt" -lt 4 ] || exit 1
+    echo "Couchside download failed (attempt $attempt); retrying"; sleep 15
+done
 
 step "open Couchside"
 as_tv 'systemd-run --user --collect --unit=couchside flatpak run io.github.shreyasajj.Couchside'

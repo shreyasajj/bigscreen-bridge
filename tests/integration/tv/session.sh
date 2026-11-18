@@ -10,7 +10,7 @@ set +u
 # shellcheck disable=SC1091
 . plasma-bigscreen-common-env
 set -u
-export QT_QUICK_BACKEND=software LIBGL_ALWAYS_SOFTWARE=1 KWIN_COMPOSE=Q XDG_SESSION_TYPE=wayland \
+export QT_QUICK_BACKEND=software LIBGL_ALWAYS_SOFTWARE=1 XDG_SESSION_TYPE=wayland \
        XDG_CURRENT_DESKTOP=KDE KDE_FULL_SESSION=true WAYLAND_DISPLAY=wayland-0
 kwin_wayland --virtual --width 1920 --height 1080 --socket wayland-0 --no-lockscreen --xwayland &
 kwin=$!
