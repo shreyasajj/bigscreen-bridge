@@ -1,0 +1,216 @@
+"""LedFx and HyperHDR, read and controlled over their local APIs."""
+import asyncio
+import json
+
+import pytest
+from aiohttp import web
+
+from bigscreen_bridge.adapters import BridgeError
+from bigscreen_bridge.lights import COMMANDS, Lights
+
+def answer(body):
+    """An async aiohttp handler returning `body()` as JSON."""
+    async def handler(_request):
+        return web.json_response(body())
+    return handler
+
+
+GRADIENT = "linear-gradient(90deg, #ff0000 0.00%, #0000ff 100.00%)"
+
+
+class FakeLedFx:
+    def __init__(self):
+        self.paused = False
+        self.puts = []
+        self.virtuals = {
+            "tv-backlight": {"config": {"name": "TV backlight"}, "active": True,
+                             "effect": {"type": "pitchSpectrum", "name": "Pitch Spectrum",
+                                        "config": {"brightness": 0.8, "gradient": GRADIENT}}},
+            "lepre": {"config": {"name": "Lepre"}, "active": False, "effect": {}},
+            "desk": {"config": {"name": "Desk"}, "active": True,
+                     "effect": {"type": "fire", "name": "Fire", "config": {"brightness": 1.0}}}}
+        self.scenes = {"blade-scene": {"name": "Blade Scene"}}
+
+    def app(self):
+        app = web.Application()
+        app.router.add_get("/api/info", answer(lambda: {"version": "2.1.9"}))
+        app.router.add_get("/api/virtuals", answer(lambda: 
+            {"status": "success", "paused": self.paused, "virtuals": self.virtuals}))
+        app.router.add_put("/api/virtuals", self.toggle)
+        app.router.add_get("/api/devices", answer(lambda: {"devices": {
+            "tv": {"online": True, "config": {"name": "TV"}}, "wall": {"online": False, "config": {"name": "Wall"}}}}))
+        app.router.add_get("/api/scenes", answer(lambda: {"scenes": self.scenes}))
+        app.router.add_put("/api/scenes", self.record)
+        app.router.add_get("/api/schema", answer(lambda: {"effects": {
+            "pitchSpectrum": {"name": "Pitch Spectrum", "schema": {"properties": {"brightness": {}, "gradient": {}}}},
+            "singleColor": {"name": "Single Color", "schema": {"properties": {"brightness": {}, "color": {}}}},
+            "fire": {"name": "Fire", "schema": {"properties": {"brightness": {}}}}}}))
+        app.router.add_put("/api/virtuals/{id}", self.record)
+        app.router.add_post("/api/virtuals/{id}/effects", self.record)
+        app.router.add_put("/api/virtuals/{id}/effects", self.record)
+        return app
+
+    async def toggle(self, request):
+        self.puts.append(("PUT", request.path, None))
+        self.paused = not self.paused
+        return web.json_response({"status": "success", "paused": self.paused})
+
+    async def record(self, request):
+        self.puts.append((request.method, request.path, await request.json()))
+        return web.json_response({"status": "success"})
+
+
+SERVERINFO = {"success": True, "info": {
+    "components": [{"name": "ALL", "enabled": True}, {"name": "LEDDEVICE", "enabled": True}],
+    "grabbers": {"active": "V4L2:USB capture"}, "lastError": "",
+    "effects": [{"name": "Rainbow swirl"}, {"name": "Candle"}],
+    "instance": [{"instance": 0, "friendly_name": "Tv backlight", "running": True},
+                 {"instance": 1, "friendly_name": "Right wall", "running": False}]}}
+
+
+class FakeHyperHdrSocket:
+    """HyperHDR's JSON server: one JSON object per line, answered by tan."""
+
+    def __init__(self):
+        self.received = []
+
+    async def handle(self, reader, writer):
+        while line := await reader.readline():
+            request = json.loads(line)
+            self.received.append(request)
+            writer.write(json.dumps({"command": request["command"], "success": True,
+                                     "tan": request.get("tan")}).encode() + b"\n")
+            await writer.drain()
+        writer.close()
+
+
+@pytest.fixture
+async def lights(aiohttp_server):
+    ledfx = FakeLedFx()
+    ledfx_server = await aiohttp_server(ledfx.app())
+    hyper_app = web.Application()
+    hyper_app.router.add_post("/json-rpc", answer(lambda: SERVERINFO))
+    hyper_server = await aiohttp_server(hyper_app)
+    socket = FakeHyperHdrSocket()
+    tcp = await asyncio.start_server(socket.handle, "127.0.0.1", 0)
+    port = tcp.sockets[0].getsockname()[1]
+    units = {"ledfx.service": "active", "hyperhdr@tv.service": "active"}
+
+    async def unit_state(_bus, unit):
+        return units[unit]
+
+    module = Lights({"ledfx_url": str(ledfx_server.make_url("")), "hyperhdr_url": str(hyper_server.make_url("")),
+                     "hyperhdr_socket": f"127.0.0.1:{port}"}, user="tv", unit_state=unit_state)
+    yield module, ledfx, socket, units, ledfx_server
+    await module.close()
+    tcp.close()
+
+
+async def test_state_describes_both(lights):
+    module, *_ = lights
+    assert await module.refresh() is True
+    ledfx, hyper = module.state["ledfx"], module.state["hyperhdr"]
+    assert ledfx["available"] and ledfx["service"] == "active" and ledfx["version"] == "2.1.9"
+    assert ledfx["paused"] is False and ledfx["devices"] == {"total": 2, "online": 1, "offline": ["Wall"]}
+    assert ledfx["scenes"] == [{"id": "blade-scene", "name": "Blade Scene", "active": False}]
+    tv = next(v for v in ledfx["virtuals"] if v["id"] == "tv-backlight")
+    assert tv == {"id": "tv-backlight", "name": "TV backlight", "active": True, "effect": "pitchSpectrum",
+                  "effect_name": "Pitch Spectrum", "brightness": 0.8, "color": None}
+    assert {"type": "fire", "name": "Fire"} in ledfx["effects"]
+    assert hyper["available"] and hyper["output"] is True and hyper["grabber"] == "V4L2:USB capture"
+    assert hyper["effects"] == ["Rainbow swirl", "Candle"]
+    assert hyper["instances"] == [{"id": 0, "name": "Tv backlight", "running": True},
+                                  {"id": 1, "name": "Right wall", "running": False}]
+    assert await module.refresh() is False   # nothing changed
+    assert set(COMMANDS) == {"ledfx_pause", "ledfx_light", "ledfx_scene", "hyperhdr_light"}
+
+
+async def test_one_service_down_leaves_the_other_working(lights):
+    module, _, _, units, ledfx_server = lights
+    await ledfx_server.close()
+    units["ledfx.service"] = "inactive"
+    await module.refresh()
+    assert module.state["ledfx"]["available"] is False and module.state["ledfx"]["service"] == "inactive"
+    assert module.state["ledfx"]["reason"] == "service_inactive"
+    assert module.state["hyperhdr"]["available"] is True
+    with pytest.raises(BridgeError) as error:
+        await module.execute("ledfx_pause", {"paused": True})
+    assert error.value.code == "service_unavailable"
+
+
+async def test_pause_only_toggles_when_it_differs(lights):
+    module, ledfx, *_ = lights
+    await module.refresh()
+    await module.execute("ledfx_pause", {"paused": False})
+    assert ledfx.puts == []
+    await module.execute("ledfx_pause", {"paused": True})
+    assert ledfx.paused is True and len(ledfx.puts) == 1
+    assert module.state["ledfx"]["paused"] is True
+
+
+async def test_light_on_effect_brightness_and_colour(lights):
+    module, ledfx, *_ = lights
+    await module.refresh()
+    await module.execute("ledfx_light", {"virtual": "lepre", "on": True})
+    assert ledfx.puts[-1] == ("PUT", "/api/virtuals/lepre", {"active": True})
+    await module.execute("ledfx_light", {"virtual": "tv-backlight", "brightness": 0.5})
+    assert ledfx.puts[-1] == ("PUT", "/api/virtuals/tv-backlight/effects", {"config": {"brightness": 0.5}})
+    await module.execute("ledfx_light", {"virtual": "tv-backlight", "color": "#00ff00"})   # gradient effect
+    assert ledfx.puts[-1][2] == {"config": {"gradient": "linear-gradient(90deg, #00ff00 0.00%, #00ff00 100.00%)"}}
+    await module.execute("ledfx_light", {"virtual": "desk", "color": "#123456"})   # neither color nor gradient
+    assert ledfx.puts[-1] == ("POST", "/api/virtuals/desk/effects",
+                              {"type": "singleColor", "config": {"color": "#123456", "brightness": 1.0}})
+    await module.execute("ledfx_light", {"virtual": "tv-backlight", "effect": "fire"})
+    assert ledfx.puts[-1] == ("POST", "/api/virtuals/tv-backlight/effects",
+                              {"type": "fire", "config": {"brightness": 0.8}})
+    await module.execute("ledfx_scene", {"scene": "blade-scene", "active": True})
+    assert ledfx.puts[-1] == ("PUT", "/api/scenes", {"id": "blade-scene", "action": "activate"})
+
+
+@pytest.mark.parametrize(("command", "request_"), [
+    ("ledfx_light", {"virtual": "nope", "on": True}),
+    ("ledfx_light", {"virtual": "tv-backlight", "effect": "unknown"}),
+    ("ledfx_light", {"virtual": "tv-backlight", "brightness": 1.5}),
+    ("ledfx_light", {"virtual": "tv-backlight", "color": "red"}),
+    ("ledfx_light", {"virtual": "tv-backlight"}),
+    ("ledfx_light", {"virtual": "lepre", "brightness": 0.5}),           # no effect running
+    ("ledfx_scene", {"scene": "nope", "active": True}),
+    ("ledfx_pause", {"paused": "yes"}),
+    ("hyperhdr_light", {"instance": 7, "on": True}),
+    ("hyperhdr_light", {"instance": 0, "effect": "Unknown"}),
+    ("hyperhdr_light", {"instance": 0, "color": [256, 0, 0]}),
+    ("hyperhdr_light", {"instance": True, "on": True}),
+])
+async def test_bad_requests_send_nothing(lights, command, request_):
+    module, ledfx, socket, *_ = lights
+    await module.refresh()
+    with pytest.raises(BridgeError) as error:
+        await module.execute(command, request_)
+    assert error.value.code in ("invalid_request", "unsupported")
+    assert ledfx.puts == [] and socket.received == []
+
+
+async def test_hyperhdr_switches_instance_before_each_command(lights):
+    module, _, socket, *_ = lights
+    await module.refresh()
+    await module.execute("hyperhdr_light", {"instance": 1, "on": True})
+    await module.execute("hyperhdr_light", {"instance": 1, "color": [255, 0, 0], "brightness": 0.5})
+    await module.execute("hyperhdr_light", {"instance": 0, "effect": "Candle"})
+    await module.execute("hyperhdr_light", {"instance": 0, "effect": "Video"})
+    sent = [{k: v for k, v in r.items() if k != "tan"} for r in socket.received]
+    assert sent == [
+        {"command": "instance", "subcommand": "startInstance", "instance": 1},
+        {"command": "instance", "subcommand": "switchTo", "instance": 1},
+        {"command": "color", "color": [255, 0, 0], "priority": 50, "origin": "Bigscreen Bridge"},
+        {"command": "adjustment", "adjustment": {"scaleOutput": 0.5}},
+        {"command": "instance", "subcommand": "switchTo", "instance": 0},
+        {"command": "effect", "effect": {"name": "Candle"}, "priority": 50, "origin": "Bigscreen Bridge"},
+        {"command": "instance", "subcommand": "switchTo", "instance": 0},
+        {"command": "clear", "priority": 50}]
+
+
+async def test_disabled_module_reports_nothing():
+    module = Lights({"lights": False})
+    assert await module.refresh() is False
+    assert module.state == {}
+    await module.close()
