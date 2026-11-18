@@ -46,6 +46,7 @@ QQC2.ApplicationWindow {
         {file: "AppSection.qml", app: "stremio"},
         {file: "AppSection.qml", app: "flimmer"},
         {file: "AppSection.qml", app: "vacuumtube"},
+        {file: "LightsSection.qml"},
         {file: "MprisSection.qml"},
         {file: "CommandsSection.qml"},
         {file: "WarningsSection.qml"}

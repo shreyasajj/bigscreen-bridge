@@ -255,3 +255,25 @@ async def test_without_the_lights_module_the_commands_say_so(bridge):
     with pytest.raises(BridgeError) as error:
         await b.execute({"id": "1", "command": "ledfx_pause", "paused": True})
     assert error.value.code == "unsupported"
+
+
+def keys(value, path=""):
+    """Every key path in `value`, with list entries collapsed to `[]`."""
+    if isinstance(value, dict):
+        return set().union(set(), *({path + "." + k} | keys(v, path + "." + k) for k, v in value.items()))
+    if isinstance(value, list):
+        return set().union(set(), *(keys(v, path + "[]") for v in value))
+    return set()
+
+
+async def test_status_screen_fixtures_have_the_real_shape(lights):
+    """The fixtures' hand-written lights match what Lights.refresh() really produces, key for key."""
+    import importlib.util
+    from pathlib import Path
+    module, *_ = lights
+    await module.refresh()
+    spec = importlib.util.spec_from_file_location(
+        "make_fixtures", Path(__file__).parents[1] / "bigscreen-status" / "tools" / "make_fixtures.py")
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    assert keys(tool.LIGHTS) == keys(module.state)

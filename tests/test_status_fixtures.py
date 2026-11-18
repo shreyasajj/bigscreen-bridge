@@ -28,6 +28,7 @@ def reference():
                                                         (CouchsideHook, StremioHook, FlimmerHook))
     bridge.vacuumtube = VacuumTubeHook(True)
     bridge.power, bridge.audio = SimpleNamespace(state={}), SimpleNamespace(state={})
+    bridge.lights = SimpleNamespace(state={"ledfx": {}, "hyperhdr": {}}, enabled=True)
     player = {"bus_name": "org.mpris.MediaPlayer2.x", "name": "X", "desktop": "", "app": None,
               "state": "idle", "role": "other"}
     bridge.sessions = SimpleNamespace(players={}, receipts={},
