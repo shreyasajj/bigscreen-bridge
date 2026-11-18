@@ -34,6 +34,19 @@ QQC2.ApplicationWindow {
     // Live only: "connecting" until the first answer, then "live" or "unreachable".
     property string link: "connecting"
     property real lastReadMs: 0
+    // Behind another app nothing here is seen: the clock stops and the bridge is not
+    // read. Coming back redraws at once with a fresh read (KWin reports the switch
+    // through the application state: Active in front, Inactive behind another window).
+    readonly property bool foreground: Qt.application.state === Qt.ApplicationActive
+    onForegroundChanged: {
+        console.info("Bridge status", foreground ? "in front: resuming" : "in the background: paused")
+        if (foreground) tick()
+    }
+
+    function tick() {
+        Ui.nowMs = window.generatedMs + (Date.now() - window.loadedAt)
+        Ui.wallMs = Date.now()
+    }
 
     // Started from a systemd unit, the window has no activation token; ask KWin for focus
     // so the remote's keys reach this window rather than the app underneath.
@@ -104,6 +117,7 @@ QQC2.ApplicationWindow {
         active: window.live
         source: "components/LiveSource.qml"
         onLoaded: {
+            item.paused = Qt.binding(() => !window.foreground)
             item.loaded.connect(status => {
                 window.link = "live"
                 Ui.linkError = ""
@@ -137,13 +151,11 @@ QQC2.ApplicationWindow {
     }
 
     Timer {
+        // Ages and the pairing countdown; only while someone can see them.
         interval: 500
-        running: true
+        running: window.foreground
         repeat: true
-        onTriggered: {
-            Ui.nowMs = window.generatedMs + (Date.now() - window.loadedAt)
-            Ui.wallMs = Date.now()
-        }
+        onTriggered: window.tick()
     }
 
     FocusScope {
