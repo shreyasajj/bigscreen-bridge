@@ -1,0 +1,79 @@
+name: Release
+
+# A pushed tag vX.Y.Z (or vX.Y.ZrcN) publishes that version; it must match
+# pyproject.toml. A dispatch with prerelease=true (the Dependabot security flow)
+# publishes the next rc after the latest stable release, stamping that version into
+# the archive only; nothing is committed. TVs install from these assets.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Publish the next rc pre-release of the current main
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Version
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          if [ "$EVENT" = push ]; then
+            python3 scripts/release_version.py check-tag "$GITHUB_REF_NAME"
+            version=${GITHUB_REF_NAME#v}
+          else
+            [ "$PRERELEASE" = true ] || { echo "Stable releases come from pushing a tag"; exit 1; }
+            git tag -l 'v*' > "$RUNNER_TEMP/tags"
+            version=$(python3 scripts/release_version.py next-prerelease --tags-file "$RUNNER_TEMP/tags")
+            python3 scripts/release_version.py stamp "$version"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version"
+      - name: Assets
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          name="bigscreen-bridge-$VERSION"
+          mkdir -p "$RUNNER_TEMP/stage" dist
+          git archive --prefix="$name/" HEAD | tar -x -C "$RUNNER_TEMP/stage"
+          cp pyproject.toml "$RUNNER_TEMP/stage/$name/pyproject.toml"   # the stamped version
+          tar -czf "dist/$name.tar.gz" -C "$RUNNER_TEMP/stage" "$name"
+          cp install.sh dist/install.sh
+          (cd dist && sha256sum "$name.tar.gz" install.sh > SHA256SUMS && cat SHA256SUMS)
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -- --title "Bigscreen Bridge $VERSION" --generate-notes
+          case "$VERSION" in *rc*) set -- "$@" --prerelease ;; esac
+          # A dispatch has no tag yet: the release creates it on the tested commit.
+          [ "$EVENT" = push ] || set -- "$@" --target "$GITHUB_SHA"
+          gh release create "v$VERSION" dist/* "$@"
