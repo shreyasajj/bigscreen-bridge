@@ -39,12 +39,16 @@ jobs:
         env:
           WANTED: ${{ github.head_ref || github.ref_name }}
         run: |
-          # A same-named branch tests a stacked pair together; otherwise main.
-          if git ls-remote --exit-code --heads https://github.com/shreyasajj/ha-bigscreen-bridge.git "$WANTED" >/dev/null; then
-            echo "ref=$WANTED" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=main" >> "$GITHUB_OUTPUT"
-          fi
+          # A same-named integration branch first, so a stacked pair tests together;
+          # then the branch named in .github/ha-integration-ref; then main.
+          url=https://github.com/shreyasajj/ha-bigscreen-bridge.git
+          pinned=$(cat bridge/.github/ha-integration-ref 2>/dev/null || true)
+          for ref in "$WANTED" "$pinned" main; do
+            if [ -n "$ref" ] && git ls-remote --exit-code --heads "$url" "$ref" >/dev/null; then
+              echo "ref=$ref" >> "$GITHUB_OUTPUT"
+              break
+            fi
+          done
       - uses: actions/checkout@v7
         with:
           repository: shreyasajj/ha-bigscreen-bridge
