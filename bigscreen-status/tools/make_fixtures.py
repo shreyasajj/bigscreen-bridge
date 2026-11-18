@@ -45,6 +45,29 @@ VIDEO = "M7lc1UVf-VE"
 CHANNEL = "channel-" + hashlib.sha256(b"tvheadend:8f3c1d2e-news").hexdigest()
 
 
+# lights.ledfx / lights.hyperhdr as lights.Lights reports them, from the TV's real setup.
+LIGHTS = {
+    "ledfx": {"available": True, "reason": None, "service": "active", "version": "2.1.9", "paused": False,
+              "virtuals": [
+                  {"id": "tv-backlight", "name": "tv-backlight", "active": True, "effect": "pitchSpectrum",
+                   "effect_name": "Pitch Spectrum", "brightness": 1.0, "color": None},
+                  {"id": "left-wall", "name": "left-wall", "active": True, "effect": "magnitude",
+                   "effect_name": "Magnitude", "brightness": 0.8, "color": None},
+                  {"id": "lepre", "name": "lepre", "active": False, "effect": None, "effect_name": None,
+                   "brightness": None, "color": None}],
+              "devices": {"total": 7, "online": 6, "offline": ["right-contoller"]},
+              "scenes": [{"id": "blade-scene", "name": "Blade Scene", "active": True}],
+              "effects": [{"type": "magnitude", "name": "Magnitude"},
+                          {"type": "pitchSpectrum", "name": "Pitch Spectrum"},
+                          {"type": "singleColor", "name": "Single Color"}]},
+    "hyperhdr": {"available": True, "reason": None, "service": "active", "output": False,
+                 "grabber": "V4L2:USB3. 0 captur", "last_error": None,
+                 "effects": ["Candle", "Rainbow swirl"],
+                 "instances": [{"id": 0, "name": "Tv backlight", "running": True},
+                               {"id": 1, "name": "Right wall", "running": True},
+                               {"id": 2, "name": "Left wall", "running": False}]}}
+
+
 def ts(seconds_ago):
     return (NOW - timedelta(seconds=seconds_ago)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
@@ -192,6 +215,7 @@ class World:
             setattr(bridge, app, hook)
         bridge.power = SimpleNamespace(state=power)
         bridge.audio = SimpleNamespace(state=audio)
+        bridge.lights = SimpleNamespace(state=copy.deepcopy(LIGHTS), enabled=True)
         # SessionController.refresh: native hooks first, then the MPRIS players they do not own.
         players, native = {}, set()
         for app in ("stremio", "flimmer", "vacuumtube"):

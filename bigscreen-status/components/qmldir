@@ -9,3 +9,4 @@ MprisSection 1.0 MprisSection.qml
 CommandsSection 1.0 CommandsSection.qml
 WarningsSection 1.0 WarningsSection.qml
 PairingSection 1.0 PairingSection.qml
+LightsSection 1.0 LightsSection.qml

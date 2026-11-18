@@ -223,6 +223,46 @@ socket 0600, both owned by the current user. The KDE bridge verifies ownership,
 permissions and socket type before connecting. This transport is local to the
 Unix user; external HA access continues through the authenticated WebSocket API.
 
+## LED lights: LedFx and HyperHDR
+
+The bridge reads both every 5 s over localhost, and whether their services run from
+systemd over D-Bus. A service that doesn't answer only marks its own section
+unavailable. Set `"lights": false` in `config.json` to turn the module off.
+
+**Config keys** (all optional):
+
+| Key | Default |
+| --- | --- |
+| `ledfx_url` | `http://127.0.0.1:8888` |
+| `hyperhdr_url` | `http://127.0.0.1:8090` (JSON-RPC, for `serverinfo`) |
+| `hyperhdr_socket` | `127.0.0.1:19444` (JSON server, for commands) |
+| `ledfx_unit` | `ledfx.service` (user unit) |
+| `hyperhdr_unit` | `hyperhdr@<user>.service` (system unit) |
+
+`snapshot.lights` holds:
+- **`ledfx`:**
+  - `available`, `reason` (`service_inactive` or `not_reachable`), `service`
+    (systemd `ActiveState`), `version`, `paused`;
+  - `virtuals[]`: `{id, name, active, effect, effect_name, brightness, color}`;
+  - `devices`: `{total, online, offline[]}`;
+  - `scenes[]`: `{id, name, active}`;
+  - `effects[]`: `{type, name}`.
+- **`hyperhdr`:**
+  - `available`, `reason`, `service`;
+  - `output` (the `ALL` component of instance 0), `grabber`, `last_error`;
+  - `effects[]` (names);
+  - `instances[]`: `{id, name, running}`.
+
+**Commands.** Each one acknowledges like any other command, and diagnostics record
+only its name:
+
+| Command | Arguments | Does |
+| --- | --- | --- |
+| `ledfx_pause` | `paused` | Pauses or resumes all of LedFx. It reads first, because LedFx only offers a toggle. |
+| `ledfx_light` | `virtual`, plus any of `on`, `effect` (a type from `effects`), `brightness` (0-1), `color` (`#rrggbb`) | Changes one virtual. `color` sets the effect's `color`, or makes its `gradient` one solid colour, or switches to `singleColor`. |
+| `ledfx_scene` | `scene`, `active` | Activates or deactivates a scene. |
+| `hyperhdr_light` | `instance`, plus any of `on`, `effect` (a name from `effects`, or `Video`), `brightness` (0-1, `scaleOutput`), `color` (`[r, g, b]`) | `on` starts or stops the instance. Colour and effects run at priority 50 as "Bigscreen Bridge"; `Video` clears them. |
+
 ## Diagnostics
 
 `{"id": "uuid", "command": "diagnostics"}` returns the bridge's own health record

@@ -33,7 +33,7 @@ COMMANDS = frozenset((
     "get_state", "diagnostics", "browse", "focus", "open", "open_uri", "play", "pause", "stop", "seek",
     "volume_set", "volume_mute", "pause_active", "pause_all", "resume_active", "resume_previously_paused",
     "stop_active", "stop_all", "screen_off", "screen_on", "lock_screen", "get_power_state",
-    "mute", "unmute", "set_volume"))
+    "mute", "unmute", "set_volume", "ledfx_pause", "ledfx_light", "ledfx_scene", "hyperhdr_light"))
 APP_IDS = frozenset(app.id for app in APPS)
 CODE = re.compile(r"[a-z][a-z0-9_]{0,47}")
 PLAIN = re.compile(r"[^\x00-\x1f\x7f]*")
