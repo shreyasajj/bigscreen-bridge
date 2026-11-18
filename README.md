@@ -296,3 +296,7 @@ configuration, reads this TV's bridge credentials over SSH without printing them
 and checks configuration flow, native entities, real services, availability/
 reconnect and unload. It uses loopback port 18123 and never modifies the user's HA
 installation. See [phase 8 verification](docs/verification-phase8.md).
+
+## License
+
+MIT, see [LICENSE](LICENSE).
