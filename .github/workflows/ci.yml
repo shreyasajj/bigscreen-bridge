@@ -1,0 +1,66 @@
+name: CI
+
+# The bridge runs on the TV's Python (3.12). Home Assistant's own tests need the
+# Python Home Assistant requires (3.14), with the integration checked out beside it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bridge-py312:
+    name: Bridge (Python 3.12)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[test,mqtt]'
+      - run: pytest -q --ignore=tests/test_homeassistant.py
+      - run: ruff check bigscreen-bridge tests scripts
+      - name: Installer test
+        run: sh tests/test_install.sh
+
+  full-py314:
+    name: Bridge and Home Assistant (Python 3.14)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: bridge
+      - name: Pick the integration branch
+        id: ha
+        env:
+          WANTED: ${{ github.head_ref || github.ref_name }}
+        run: |
+          # A same-named branch tests a stacked pair together; otherwise main.
+          if git ls-remote --exit-code --heads https://github.com/shreyasajj/ha-bigscreen-bridge.git "$WANTED" >/dev/null; then
+            echo "ref=$WANTED" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v7
+        with:
+          repository: shreyasajj/ha-bigscreen-bridge
+          ref: ${{ steps.ha.outputs.ref }}
+          path: ha-bigscreen-bridge
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: echo "Integration ref ${{ steps.ha.outputs.ref }}"
+      - working-directory: bridge
+        run: pip install -e '.[test,ha-test,mqtt]'
+      - working-directory: bridge
+        run: pytest -q
+
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: shellcheck install.sh scripts/*.sh bigscreen-status/*.sh

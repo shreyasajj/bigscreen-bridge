@@ -4,7 +4,7 @@ set -eu
 source_root="${1:-../VacuumTube}"
 tv_host="${BIGSCREEN_TV:-mediac@192.168.30.153}"
 [ -f "$source_root/scripts/build-bridge-asar.cjs" ] || exit 1
-source_root=$(CDPATH= cd -- "$source_root" && pwd)
+source_root=$(CDPATH='' cd -- "$source_root" && pwd)
 local_stage=$(mktemp -d "${TMPDIR:-/tmp}/bigscreen-vacuumtube-XXXXXX")
 trap 'rm -rf "$local_stage"' EXIT HUP INT TERM
 baseline_root=$(ssh "$tv_host" 'flatpak info --show-location rocks.shy.VacuumTube')
