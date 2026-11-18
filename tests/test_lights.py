@@ -47,13 +47,22 @@ class FakeLedFx:
             "fire": {"name": "Fire", "schema": {"properties": {"brightness": {}}}}}}))
         app.router.add_put("/api/virtuals/{id}", self.record)
         app.router.add_post("/api/virtuals/{id}/effects", self.record)
-        app.router.add_put("/api/virtuals/{id}/effects", self.record)
+        app.router.add_put("/api/virtuals/{id}/effects", self.update_effect)
         return app
 
     async def toggle(self, request):
         self.puts.append(("PUT", request.path, None))
         self.paused = not self.paused
         return web.json_response({"status": "success", "paused": self.paused})
+
+    async def update_effect(self, request):
+        """Like LedFx: without the running effect's type, the PUT replaces the effect, so refuse it here."""
+        body = await request.json()
+        running = (self.virtuals[request.match_info["id"]].get("effect") or {}).get("type")
+        if body.get("type") != running:
+            return web.json_response({"status": "failed", "reason": "type does not match"}, status=400)
+        self.puts.append((request.method, request.path, body))
+        return web.json_response({"status": "success"})
 
     async def record(self, request):
         self.puts.append((request.method, request.path, await request.json()))
@@ -154,9 +163,11 @@ async def test_light_on_effect_brightness_and_colour(lights):
     await module.execute("ledfx_light", {"virtual": "lepre", "on": True})
     assert ledfx.puts[-1] == ("PUT", "/api/virtuals/lepre", {"active": True})
     await module.execute("ledfx_light", {"virtual": "tv-backlight", "brightness": 0.5})
-    assert ledfx.puts[-1] == ("PUT", "/api/virtuals/tv-backlight/effects", {"config": {"brightness": 0.5}})
+    assert ledfx.puts[-1] == ("PUT", "/api/virtuals/tv-backlight/effects",
+                              {"type": "pitchSpectrum", "config": {"brightness": 0.5}})
     await module.execute("ledfx_light", {"virtual": "tv-backlight", "color": "#00ff00"})   # gradient effect
-    assert ledfx.puts[-1][2] == {"config": {"gradient": "linear-gradient(90deg, #00ff00 0.00%, #00ff00 100.00%)"}}
+    assert ledfx.puts[-1][2] == {"type": "pitchSpectrum",
+                                 "config": {"gradient": "linear-gradient(90deg, #00ff00 0.00%, #00ff00 100.00%)"}}
     await module.execute("ledfx_light", {"virtual": "desk", "color": "#123456"})   # neither color nor gradient
     assert ledfx.puts[-1] == ("POST", "/api/virtuals/desk/effects",
                               {"type": "singleColor", "config": {"color": "#123456", "brightness": 1.0}})

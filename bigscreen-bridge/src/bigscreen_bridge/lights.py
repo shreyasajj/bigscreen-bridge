@@ -196,6 +196,8 @@ class Lights:
         if brightness is not None and effect is None and virtual["effect"] is None:
             raise BridgeError("unsupported", "This virtual has no effect running")
         base = f"/api/virtuals/{virtual['id']}"
+        # LedFx updates the running effect only when `type` names it; without it, a PUT
+        # replaces the effect with nothing (and saves that). Every PUT below carries it.
         current = effect or virtual["effect"]
         level = brightness if brightness is not None else virtual["brightness"]
         if effect is not None:
@@ -204,15 +206,15 @@ class Lights:
         if color is not None:
             keys = (self.schema or {}).get(current, {}).get("keys", set())
             if "color" in keys:
-                await self._ledfx_send("PUT", base + "/effects", {"config": {"color": color}})
+                await self._ledfx_send("PUT", base + "/effects", {"type": current, "config": {"color": color}})
             elif "gradient" in keys:
                 solid = f"linear-gradient(90deg, {color} 0.00%, {color} 100.00%)"
-                await self._ledfx_send("PUT", base + "/effects", {"config": {"gradient": solid}})
+                await self._ledfx_send("PUT", base + "/effects", {"type": current, "config": {"gradient": solid}})
             else:
                 config = {"color": color, **({} if level is None else {"brightness": level})}
                 await self._ledfx_send("POST", base + "/effects", {"type": "singleColor", "config": config})
         if brightness is not None and effect is None:
-            await self._ledfx_send("PUT", base + "/effects", {"config": {"brightness": brightness}})
+            await self._ledfx_send("PUT", base + "/effects", {"type": current, "config": {"brightness": brightness}})
         if on is not None:
             await self._ledfx_send("PUT", base, {"active": on})
         return {"virtual": virtual["id"]}
