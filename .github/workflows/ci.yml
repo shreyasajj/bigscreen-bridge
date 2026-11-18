@@ -90,4 +90,4 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - run: shellcheck install.sh scripts/*.sh bigscreen-status/*.sh tests/*.sh
+      - run: shellcheck install.sh scripts/*.sh bigscreen-status/*.sh tests/*.sh tests/integration/*.sh tests/integration/tv/*.sh

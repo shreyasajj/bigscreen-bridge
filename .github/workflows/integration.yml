@@ -1,0 +1,27 @@
+name: Integration
+
+# The real system in Docker: a headless Plasma Bigscreen TV with real Flatpak apps and
+# the bridge. Reports only; never a required check.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * *"
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - tests/integration/**
+      - .github/workflows/integration.yml
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    name: Headless Bigscreen TV
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: TV container, bridge and Couchside
+        run: sh tests/integration/spike.sh

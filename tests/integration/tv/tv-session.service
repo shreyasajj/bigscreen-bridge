@@ -1,0 +1,10 @@
+[Unit]
+Description=Headless Plasma Bigscreen session (integration tests)
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/tv-session
+Restart=no
+
+[Install]
+WantedBy=default.target
