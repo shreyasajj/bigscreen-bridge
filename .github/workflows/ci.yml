@@ -98,4 +98,17 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - run: shellcheck install.sh scripts/*.sh bigscreen-status/*.sh tests/*.sh tests/integration/*.sh tests/integration/tv/*.sh
+      - run: shellcheck install.sh scripts/*.sh bigscreen-status/*.sh bigscreen-status/tests/*.sh tests/*.sh tests/integration/*.sh tests/integration/tv/*.sh
+
+  status-screen:
+    name: Bridge Status keys
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Plasma image
+        run: |
+          docker build -q --target plasma -t bigscreen-plasma tests/integration/tv
+          docker build -q -t bigscreen-status-test bigscreen-status/tests
+      - name: Press every key against a stand-in bridge
+        run: docker run --rm -v "$PWD/bigscreen-status:/status:ro" bigscreen-status-test

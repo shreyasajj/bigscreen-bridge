@@ -19,7 +19,8 @@ QQC2.ApplicationWindow {
     color: Kirigami.Theme.backgroundColor
 
     // Everything after `--` on the qml6 command line is ours; decided before anything loads.
-    readonly property var ourArgs: {
+    // Settable only so the key tests can open the screen in a chosen mode.
+    property var ourArgs: {
         const args = Qt.application.arguments
         return args.indexOf("--") >= 0 ? args.slice(args.indexOf("--") + 1) : []
     }
@@ -38,6 +39,7 @@ QQC2.ApplicationWindow {
     // read. Coming back redraws at once with a fresh read (KWin reports the switch
     // through the application state: Active in front, Inactive behind another window).
     readonly property bool foreground: Qt.application.state === Qt.ApplicationActive
+    signal closeRequested()   // Back on a folded card, just before the screen quits
     onForegroundChanged: {
         console.info("Bridge status", foreground ? "in front: resuming" : "in the background: paused")
         if (foreground) tick()
@@ -176,7 +178,7 @@ QQC2.ApplicationWindow {
                 // Back first folds an open "data sources" panel, then closes the screen.
                 const card = list.currentItem && list.currentItem.item
                 if (card && card.expanded) card.expanded = false
-                else Qt.quit()
+                else { window.closeRequested(); Qt.quit() }
                 event.accepted = true
                 break
             }
@@ -296,6 +298,7 @@ QQC2.ApplicationWindow {
 
             ListView {
                 id: list
+                objectName: "cards"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 focus: true
