@@ -63,6 +63,13 @@ bridge) and the D-Bus error name, never the last data, and keeps retrying. The
 badge reads LIVE or NO BRIDGE; the header shows when the bridge last answered. Ages
 are computed against the bridge's `generated_at`.
 
+Behind another app the screen does no work: the 500 ms clock (ages, the pairing
+countdown) stops, and neither signals nor the 10 s tick cause a read. It follows Qt's
+application state, which KWin sets to inactive when another window takes the front.
+When the screen comes back it reads the bridge once and redraws straight away.
+Measured on the TV with music playing: 14 `Status()` reads in 20 s in front, 0
+behind Couchside, 15 after switching back. The journal logs each pause and resume.
+
 `SignalWatcher` only receives signals when `service` is a well-known name. With an
 empty service nothing arrives (tested on the TV).
 
