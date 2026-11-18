@@ -256,3 +256,124 @@ async def test_music_assistant_changes_show_on_the_tv_player_at_once(coordinator
     await coordinator.hass.async_block_till_done()
     assert written == [MediaPlayerState.PAUSED]
     await player.async_will_remove_from_hass()
+
+
+LIGHT_STATE = {
+    "ledfx": {"available": True, "reason": None, "service": "active", "version": "2.1.9", "paused": False,
+              "virtuals": [{"id": "tv-backlight", "name": "TV backlight", "active": True, "effect": "pitchSpectrum",
+                            "effect_name": "Pitch Spectrum", "brightness": 0.8, "color": None},
+                           {"id": "desk", "name": "Desk", "active": False, "effect": "singleColor",
+                            "effect_name": "Single Color", "brightness": 1.0, "color": "#ff8000"}],
+              "devices": {"total": 7, "online": 6, "offline": ["right-contoller"]},
+              "scenes": [{"id": "blade-scene", "name": "Blade Scene", "active": False}],
+              "effects": [{"type": "fire", "name": "Fire"}, {"type": "pitchSpectrum", "name": "Pitch Spectrum"},
+                          {"type": "singleColor", "name": "Single Color"}]},
+    "hyperhdr": {"available": True, "reason": None, "service": "active", "output": False,
+                 "grabber": "V4L2:USB capture", "last_error": "VIDIOC_QBUF error",
+                 "effects": ["Candle", "Rainbow swirl"],
+                 "instances": [{"id": 0, "name": "Tv backlight", "running": True},
+                               {"id": 1, "name": "Right wall", "running": False}]}}
+
+
+class RecordingLights:
+    enabled = True
+
+    def __init__(self):
+        import copy
+        self.state = copy.deepcopy(LIGHT_STATE)
+        self.calls = []
+
+    async def execute(self, command, request):
+        self.calls.append((command, request))
+        return {}
+
+
+def by_key(entities):
+    return {entity.key: entity for entity in entities}
+
+
+async def test_bridge_status_entities(coordinator, bridge, recorder):
+    from custom_components.bigscreen_bridge import binary_sensor, sensor
+    b, _ = bridge
+    b.diagnostics = recorder
+    recorder.started(8765)                       # as serve() does
+    await coordinator.refresh_diagnostics()
+    diagnostics = recorder.to_dict(b)
+    sensors = by_key(sensor.entities(coordinator))
+    assert sensors["version"].native_value == diagnostics["service"]["version"]
+    assert sensors["started"].native_value.isoformat().startswith(diagnostics["service"]["started_at"][:19])
+    assert sensors["clients"].native_value == 1
+    assert sensors["discovery"].native_value in ("announced", "not_announced", "disabled")
+    assert sensors["mqtt"].native_value == "not_configured"
+    assert sensors["focused_app"].native_value == "Other window"
+    assert sensors["windows"].native_value == 0
+    assert sensors["warnings"].native_value == 0
+    assert sensors["version"].entity_category.value == "diagnostic"
+    binaries = by_key(binary_sensor.entities(coordinator))
+    assert binaries["health"].is_on is (diagnostics["service"]["health"] != "ok")
+    assert "ledfx_service" not in sensors and "ledfx_service" not in binaries   # this bridge has no lights
+
+
+async def test_light_entities_and_their_commands(coordinator, bridge):
+    from custom_components.bigscreen_bridge import binary_sensor, light, scene, sensor, switch
+    b, _ = bridge
+    b.lights = RecordingLights()
+    coordinator.async_set_updated_data(await coordinator._async_update_data())
+    lights = by_key(light.entities(coordinator))
+    tv = lights["ledfx_tv-backlight"]
+    assert tv.name == "LedFx TV backlight" and tv.is_on and tv.brightness == 204
+    assert tv.effect == "Pitch Spectrum" and tv.effect_list == ["Fire", "Pitch Spectrum", "Single Color"]
+    assert lights["ledfx_desk"].rgb_color == (255, 128, 0) and not lights["ledfx_desk"].is_on
+    await tv.async_turn_on(brightness=128, rgb_color=(0, 255, 0), effect="Fire")
+    await tv.async_turn_off()
+    wall = lights["hyperhdr_1"]
+    assert wall.name == "HyperHDR Right wall" and not wall.is_on and wall.effect_list[0] == "Video"
+    await wall.async_turn_on(rgb_color=(255, 0, 0), brightness=255)
+    await wall.async_turn_on(effect="Video")
+    await wall.async_turn_off()
+    playing = by_key(switch.entities(coordinator))["ledfx_playing"]
+    assert playing.is_on
+    await playing.async_turn_off()
+    blade = by_key(scene.entities(coordinator))["ledfx_scene_blade-scene"]
+    assert blade.name == "LedFx Blade Scene"
+    await blade.async_activate()
+    assert b.lights.calls == [
+        ("ledfx_light", {"virtual": "tv-backlight", "on": True, "effect": "fire", "brightness": 0.502, "color": "#00ff00"}),
+        ("ledfx_light", {"virtual": "tv-backlight", "on": False}),
+        ("hyperhdr_light", {"instance": 1, "on": True, "color": [255, 0, 0], "brightness": 1.0}),
+        ("hyperhdr_light", {"instance": 1, "on": True, "effect": "Video"}),
+        ("hyperhdr_light", {"instance": 1, "on": False}),
+        ("ledfx_pause", {"paused": True}),
+        ("ledfx_scene", {"scene": "blade-scene", "active": True})]
+    binaries = by_key(binary_sensor.entities(coordinator))
+    assert binaries["ledfx_service"].is_on and binaries["hyperhdr_service"].is_on
+    assert binaries["hyperhdr_output"].is_on is False
+    sensors = by_key(sensor.entities(coordinator))
+    assert sensors["ledfx_devices"].native_value == 6
+    assert sensors["ledfx_devices"].extra_state_attributes == {"total": 7, "offline": ["right-contoller"]}
+    assert sensors["hyperhdr_grabber"].native_value == "V4L2:USB capture"
+    assert sensors["hyperhdr_grabber"].extra_state_attributes == {"last_error": "VIDIOC_QBUF error"}
+
+
+async def test_a_stopped_light_service_makes_its_entities_unavailable(coordinator, bridge):
+    from custom_components.bigscreen_bridge import binary_sensor, light
+    b, _ = bridge
+    b.lights = RecordingLights()
+    coordinator.async_set_updated_data(await coordinator._async_update_data())
+    lights = by_key(light.entities(coordinator))
+    b.lights.state["ledfx"] = {"available": False, "reason": "service_inactive", "service": "inactive"}
+    coordinator.async_set_updated_data(await coordinator._async_update_data())
+    assert not lights["ledfx_tv-backlight"].available and lights["hyperhdr_0"].available
+    service = by_key(binary_sensor.entities(coordinator))["ledfx_service"]
+    assert service.available and service.is_on is False
+
+
+async def test_downloaded_diagnostics_never_hold_the_token(coordinator, bridge, recorder):
+    from custom_components.bigscreen_bridge.diagnostics import async_get_config_entry_diagnostics
+    b, _ = bridge
+    b.diagnostics = recorder
+    await coordinator.refresh_diagnostics()
+    coordinator.entry.runtime_data = coordinator
+    report = await async_get_config_entry_diagnostics(coordinator.hass, coordinator.entry)
+    assert "a" * 48 not in str(report)
+    assert report["bridge_diagnostics"]["service"]["version"] and report["state"]["device_id"] == "test-device"

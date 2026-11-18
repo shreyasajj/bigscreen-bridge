@@ -155,6 +155,17 @@ The config and installation stay in place until explicitly removed. The persiste
 KWin monitor is unloaded during normal service shutdown; restarting the bridge also
 replaces an old monitor after an unexpected crash.
 
+### LED lights
+
+When LedFx or HyperHDR runs on the TV, the bridge reports it and Home Assistant gets:
+- **LedFx:** a light per virtual (on/off, brightness, colour, effect), a playing or
+  paused switch, its scenes, and how many devices are online;
+- **HyperHDR:** a light per instance, its output, and its grabber.
+
+Both show on the Bridge Status screen's **Lights** card. Everything stays on
+localhost; see [docs/protocol.md](docs/protocol.md#led-lights-ledfx-and-hyperhdr)
+for the config keys and commands.
+
 ## Install the Home Assistant integration
 
 The integration lives in its own repository,
