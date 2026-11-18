@@ -515,3 +515,37 @@ async def test_series_metadata_and_display_sensor(wired):
     coordinator.data["audio"].update(available=True, volume=0.42)
     assert by_key(binary_sensor.entities(coordinator))["display"].is_on is True
     assert by_key(sensor.entities(coordinator))["volume"].native_value == 42
+
+
+# --- the coordinator's periodic diagnostics read -----------------------------------------
+
+async def test_diagnostics_are_reread_on_the_slow_interval(wired):
+    coordinator, recorder = wired
+    recorder.answer = {"service": {"version": "9.9.9"}}
+    coordinator.diagnostics_at = 0
+    await coordinator._async_update_data()
+    assert {"command": "diagnostics"} in recorder.calls and coordinator.diagnostics["service"]["version"] == "9.9.9"
+
+
+async def test_an_older_bridge_without_diagnostics_has_none(wired):
+    coordinator, recorder = wired
+    coordinator.diagnostics = {"stale": True}
+    recorder.refuse = BridgeError("unsupported", "Unknown command")
+    await coordinator.refresh_diagnostics()
+    assert coordinator.diagnostics is None
+
+
+async def test_a_failed_diagnostics_read_keeps_the_last_one(wired):
+    coordinator, recorder = wired
+    coordinator.diagnostics = {"service": {"version": "0.2.2"}}
+    recorder.refuse = BridgeError("internal_error", "Bridge operation failed")
+    await coordinator.refresh_diagnostics()
+    assert coordinator.diagnostics == {"service": {"version": "0.2.2"}}
+
+
+async def test_a_failed_state_read_marks_the_update_failed(wired):
+    from homeassistant.helpers.update_coordinator import UpdateFailed
+    coordinator, recorder = wired
+    recorder.refuse = BridgeError("internal_error", "Bridge operation failed")
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
