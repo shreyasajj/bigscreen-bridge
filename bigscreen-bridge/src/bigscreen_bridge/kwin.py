@@ -11,6 +11,7 @@ from dbus_next.constants import NameFlag, RequestNameReply
 from dbus_next.service import ServiceInterface, method
 
 from .adapters import BridgeError
+from .diagnostics import NULL
 
 
 class Receiver(ServiceInterface):
@@ -30,6 +31,7 @@ class Receiver(ServiceInterface):
             return
         self.manager.windows = windows
         self.manager.ready.set()
+        self.manager.recorder.kwin_report()
         self.manager.changed()
 
     @method()
@@ -57,6 +59,7 @@ class KWin:
         self.bus = None
         self.scripting = None
         self.monitor_name = "bigscreen-bridge-monitor"
+        self.recorder = NULL
 
     async def start(self):
         self.bus = await MessageBus().connect()

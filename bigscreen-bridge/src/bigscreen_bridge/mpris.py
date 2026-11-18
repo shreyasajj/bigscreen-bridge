@@ -74,7 +74,8 @@ class MprisRegistry:
                     pending = self.settling.pop(follower.app, None)
                     if pending:
                         pending.cancel()
-                    self.settling[follower.app] = asyncio.get_running_loop().call_later(settle, follower.announce)
+                    self.settling[follower.app] = asyncio.get_running_loop().call_later(
+                        settle, lambda: follower.announce(received=False))
         if (message.interface == 'org.freedesktop.DBus.Properties' and message.path == PATH
                 and message.member == 'PropertiesChanged' and message.sender in self.owners
                 and len(message.body) == 3 and message.body[0] == PLAYER):

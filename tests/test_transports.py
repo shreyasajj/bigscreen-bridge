@@ -261,12 +261,12 @@ async def test_zeroconf_discovery_only_asks_for_the_token(bridge, monkeypatch):
         form = await flow.async_step_zeroconf(found)
         url = f"http://{http.host}:{http.port}"
         flow._abort_if_unique_id_configured.assert_called_once_with(updates={"url": url})
-        assert form["step_id"] == "pair" and list(form["data_schema"].schema) == ["token"]
-        assert (await flow.async_step_pair({"token": "b" * 48}))["errors"] == {"base": "invalid_auth"}
-        created = await flow.async_step_pair({"token": "a" * 48})
+        assert form["step_id"] == "pair" and list(form["data_schema"].schema) == ["code"]
+        assert (await flow.async_step_pair({"code": "b" * 48}))["errors"] == {"base": "invalid_auth"}
+        created = await flow.async_step_pair({"code": "a" * 48})
         assert created == {"title": "TV", "data": {"url": url, "token": "a" * 48}}
         flow.context["unique_id"] = "another-device"
-        assert (await flow.async_step_pair({"token": "a" * 48}))["errors"] == {"base": "wrong_device"}
+        assert (await flow.async_step_pair({"code": "a" * 48}))["errors"] == {"base": "wrong_device"}
         for properties in ({"name": "TV", "protocol": "1"}, {"device_id": "x", "protocol": "2"}):
             aborted = await flow.async_step_zeroconf(SimpleNamespace(host="h", port=1, properties=properties))
             assert aborted == {"reason": "not_supported"}

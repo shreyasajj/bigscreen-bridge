@@ -222,3 +222,101 @@ connection at `$XDG_RUNTIME_DIR/bigscreen-bridge/vacuumtube.sock`, directory 070
 socket 0600, both owned by the current user. The KDE bridge verifies ownership,
 permissions and socket type before connecting. This transport is local to the
 Unix user; external HA access continues through the authenticated WebSocket API.
+
+## Diagnostics
+
+`{"id": "uuid", "command": "diagnostics"}` returns the bridge's own health record
+(`bigscreen_bridge/diagnostics.py`). It takes no arguments (any other key is
+`invalid_request`) and changes nothing. It is not part of the pushed `state`
+snapshot or the MQTT `state` topic, so entities do not change on every request or
+log line. Times are UTC ISO 8601 with milliseconds and `Z`; compute ages against
+`generated_at`, not the client's clock.
+
+```json
+{"schema": 1, "generated_at": "…Z",
+ "service":   {"version", "started_at", "port", "health": "ok" | "degraded"},
+ "websocket": {"clients", "last_connected_at", "last_disconnected_at", "last_disconnect_reason"},
+ "discovery": {"enabled", "announced", "error", "service_type", "instance"},
+ "mqtt":      {"configured", "connected", "broker": "host:port", "tls", "commands_enabled",
+               "last_connected_at", "last_error", "failures", "retry_seconds"},
+ "kwin":      {"ready", "windows", "last_report_at"},
+ "hooks": {"<app>": {"transport": "dbus" | "socket", "endpoint", "enabled", "reachable", "ready",
+                     "mode": "pushed" | "polled", "poll_reason", "signal_source", "signals_received",
+                     "last_signal_at", "last_read_at", "last_read_ok", "consecutive_failures",
+                     "last_error": {"code", "message", "at"} | null}},
+ "mpris":    [{"bus_name", "identity", "desktop", "app", "state", "role", "superseded_by"}],
+ "commands": [{"id", "command", "app", "transport", "started_at", "finished_at", "ok",
+               "error_code", "duration_ms"}],
+ "warnings": [{"at", "level", "logger", "message", "count"}]}
+```
+
+- `last_disconnect_reason`: `normal`, `heartbeat_timeout`, `send_timeout`,
+  `connection_lost` or `unexpected_message` (a non-text frame).
+- `mqtt.last_error` is the exception class name; `failures` counts attempts since
+  the last successful connection.
+- `poll_reason` (only while `mode` is `polled`): `not_running` (no endpoint, no
+  window), `not_ready` (a window but no answering endpoint, or VacuumTube before
+  Leanback is ready), or `never_signalled` (answers, but never signalled). `signal_source` is `StateChanged` or `mpris`.
+- Couchside adds `music_assistant_ready`; Flimmer adds `catalogue_loading`,
+  `catalogue_loading_since` and `channels` (the last `list_channels` total, `null`
+  until a page was listed).
+- `commands` keeps the last 50 requests from every transport; a retry answered from
+  the cache is not listed again, and a request still running has `ok: null`.
+  `command` and `app` are only known names (otherwise `unknown`).
+- `warnings` keeps the last 50 distinct `bigscreen_bridge.*` log messages at INFO
+  and above, with repeats folded into `count`.
+
+Never included: the token, MQTT credentials, content IDs, URIs, search text, volume
+levels, window captions or application payloads. Error messages are the bridge's
+own fixed strings; when an app reports an error only its code is kept (or `error`
+if the code is not a plain identifier), with the message "`<App>` reported an error".
+
+## Local read-only status (session bus)
+
+For screens on the TV itself, which should not need the token, the bridge exports a
+second interface beside the KWin receiver on its own name:
+
+| | |
+| --- | --- |
+| Name | `org.bigscreen.Bridge` |
+| Path | `/org/bigscreen/Bridge` |
+| Interface | `org.bigscreen.Bridge.Status` |
+| `Status() → s` | JSON `{"snapshot": <the state snapshot>, "diagnostics": <as above>, "pairing": <code or null, see Pairing>}` |
+| `StatusChanged()` | no arguments; sent when either changes, at most about twice a second |
+
+It has no other methods or properties and nothing on it can change the TV, the apps
+or the bridge. (Asking for a new pairing code is a separate interface; see Pairing.) Listen for `StatusChanged` and re-read `Status()`; also re-read now
+and then, because a signal can be missed while the bridge restarts. The session bus
+is private to the logged-in user, who can already read the bridge's config and
+token, so this does not widen access. The older `org.bigscreen.Bridge` interface at
+the same path is the KWin script callback and is not meant for clients.
+
+```sh
+busctl --user call org.bigscreen.Bridge /org/bigscreen/Bridge org.bigscreen.Bridge.Status Status
+```
+
+## Pairing
+
+`POST /pair` with `{"code": "7KQ4-MXD2", "name": "Home Assistant"}` exchanges the code
+shown on the TV for a new bearer token for that client:
+`{"ok": true, "token": "...", "device_id": "...", "name": "..."}`. Spaces, dashes
+and case in the code are ignored. Errors are `{"ok": false, "error": {"code",
+"message"}}` with HTTP 400 `invalid_request` (also for any browser `Origin`), 403
+`invalid_code` (wrong, used or expired), 409 `too_many_clients` (32), 429
+`rate_limited` (more than 20 attempts a minute), or 404 when pairing is not enabled.
+
+- Codes are 8 characters from `23456789ABCDEFGHJKMNPQRSTVWXYZ`, last 5 minutes, work
+  once, and are withdrawn after 5 wrong attempts.
+- While no client has paired, a code is always available (`reason: "unpaired"`);
+  afterwards only on request (`reason: "requested"`).
+- Each client gets its own token; only its SHA-256 hash is stored, in
+  `clients.json` (mode 0600) beside the config. The WebSocket accepts these tokens
+  and the config's `token`. `bigscreen-bridge-clients revoke <id>` removes one, and
+  the running bridge stops accepting it at once.
+- The code is only ever in `Status()` (key `pairing`, `{"code", "reason",
+  "expires_at"}` or `null`). It is never in the WebSocket, diagnostics, MQTT or the
+  journal. Diagnostics carry `pairing: {"active", "reason", "paired_clients",
+  "last_paired_at", "last_paired_name"}`.
+- `org.bigscreen.Bridge.Pairing.StartPairing()` at `/org/bigscreen/Bridge` asks for a
+  new code; it is the only session-bus method that changes anything, and it cannot
+  pair by itself: the code still has to be typed into the client.

@@ -18,6 +18,8 @@ import logging
 import re
 import ssl
 
+from .diagnostics import NULL
+
 LOG = logging.getLogger(__name__)
 _TOPIC = re.compile(r"[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*")
 
@@ -56,6 +58,8 @@ class MqttLink:
         self.base = options["base"]
         self.client = None
         self.cache = OrderedDict()
+        self.recorder = getattr(bridge, "diagnostics", NULL)
+        self.recorder.mqtt_configured(options, retry)
 
     async def publish_state(self):
         if self.client:
@@ -66,7 +70,7 @@ class MqttLink:
             response = {"type": "result", "id": None, "ok": False,
                         "error": {"code": "invalid_request", "message": "Request too large"}}
         else:
-            response = await self.bridge.handle(payload, self.cache)
+            response = await self.bridge.handle(payload, self.cache, transport="mqtt")
         await self.client.publish(self.base + "/response", json.dumps(response), qos=1)
 
     async def session(self):
@@ -74,6 +78,7 @@ class MqttLink:
             self.client = client
             try:
                 await client.publish(self.base + "/availability", "online", qos=1, retain=True)
+                self.recorder.mqtt_connected()
                 await self.publish_state()
                 if self.options["commands"]:
                     await client.subscribe(self.base + "/command", qos=1)
@@ -88,6 +93,7 @@ class MqttLink:
                 raise
             finally:
                 self.client = None
+                self.recorder.mqtt_disconnected()
 
     async def run(self):
         self.bridge.publishers.append(self.publish_state)
@@ -98,6 +104,7 @@ class MqttLink:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # broker errors must never take the bridge down
+                    self.recorder.mqtt_disconnected(exc)
                     LOG.warning("MQTT link lost: %s", type(exc).__name__)
                 await asyncio.sleep(self.retry)
         finally:

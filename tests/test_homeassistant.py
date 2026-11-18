@@ -92,13 +92,35 @@ async def test_config_flow_checks_live_bridge_identity(coordinator, token, error
     flow._abort_if_unique_id_configured = Mock()
     flow.async_create_entry = Mock(return_value={"type": "create_entry"})
     flow.async_show_form = Mock(side_effect=lambda **kwargs: kwargs)
-    result = await flow.async_step_user({"url": coordinator.entry.data["url"], "token": token})
+    result = await flow.async_step_user({"url": coordinator.entry.data["url"], "code": token})
     if error:
         assert result["errors"]["base"] == error
         flow.async_set_unique_id.assert_not_called()
     else:
         flow.async_set_unique_id.assert_awaited_once_with("test-device")
         flow.async_create_entry.assert_called_once()
+
+
+async def test_config_flow_pairs_with_the_code_shown_on_the_tv(coordinator, bridge, tmp_path):
+    from custom_components.bigscreen_bridge.config_flow import ConfigFlow
+    from bigscreen_bridge.pairing import Pairing
+    b, _ = bridge
+    b.pairing = Pairing(tmp_path / "clients.json")
+    shown = b.status()["pairing"]["code"]
+    flow = ConfigFlow()
+    flow.hass = coordinator.hass
+    flow.async_set_unique_id = AsyncMock()
+    flow._abort_if_unique_id_configured = Mock()
+    flow.async_create_entry = Mock(side_effect=lambda **kwargs: kwargs)
+    flow.async_show_form = Mock(side_effect=lambda **kwargs: kwargs)
+    url = coordinator.entry.data["url"]
+    wrong = await flow.async_step_user({"url": url, "code": "2222-2222"})
+    assert wrong["errors"]["base"] == "invalid_auth"
+    created = await flow.async_step_user({"url": url, "code": shown.lower().replace("-", " ")})
+    token = created["data"]["token"]
+    assert created["data"] == {"url": url, "token": token} and b.pairing.accepts(token)
+    assert b.status()["pairing"] is None   # paired: the TV stops showing a code
+    assert list(wrong["data_schema"].schema) == ["url", "code"]
 
 
 async def test_reauth_rejects_replacement_device(coordinator, bridge):
@@ -110,7 +132,7 @@ async def test_reauth_rejects_replacement_device(coordinator, bridge):
     flow.async_show_form = Mock(side_effect=lambda **kwargs: kwargs)
     flow.async_update_reload_and_abort = Mock(return_value={"type": "abort"})
     b.config["device_id"] = "replacement-device"
-    result = await flow.async_step_reauth_confirm({"token": "a" * 48})
+    result = await flow.async_step_reauth_confirm({"code": "a" * 48})
     assert result["errors"]["base"] == "wrong_device"
     flow.async_update_reload_and_abort.assert_not_called()
 

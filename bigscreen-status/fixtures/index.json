@@ -1,0 +1,56 @@
+[
+  {
+    "id": "healthy",
+    "title": "All healthy",
+    "summary": "Every hook answers and announces its own changes.",
+    "file": "healthy.json"
+  },
+  {
+    "id": "polled",
+    "title": "One app polled",
+    "summary": "Stremio is an older build that never signals, so it is read every 2 s.",
+    "file": "polled.json"
+  },
+  {
+    "id": "flimmer_loading",
+    "title": "Flimmer catalogue loading",
+    "summary": "Flimmer is ready but its channel list is still loading; the open request is retrying.",
+    "file": "flimmer_loading.json"
+  },
+  {
+    "id": "vacuumtube_down",
+    "title": "VacuumTube socket unreachable",
+    "summary": "The YouTube window is open and its Chromium player is playing, but the private socket does not answer.",
+    "file": "vacuumtube_down.json"
+  },
+  {
+    "id": "display_off",
+    "title": "Display off",
+    "summary": "Home Assistant paused everything and turned the screen off (DPMS).",
+    "file": "display_off.json"
+  },
+  {
+    "id": "mqtt_down",
+    "title": "MQTT broker down",
+    "summary": "The broker went away four minutes ago; the link retries every 5 s.",
+    "file": "mqtt_down.json"
+  },
+  {
+    "id": "ha_disconnected",
+    "title": "Home Assistant disconnected",
+    "summary": "No WebSocket client has been connected for three minutes.",
+    "file": "ha_disconnected.json"
+  },
+  {
+    "id": "unpaired",
+    "title": "Waiting to pair",
+    "summary": "Nothing has paired yet, so the TV shows a pairing code for Home Assistant.",
+    "file": "unpaired.json"
+  },
+  {
+    "id": "command_burst",
+    "title": "Burst of failed commands",
+    "summary": "An automation fired a run of invalid or unanswerable requests.",
+    "file": "command_burst.json"
+  }
+]

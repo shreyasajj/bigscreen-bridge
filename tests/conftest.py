@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 import sys
@@ -7,6 +8,7 @@ import pytest
 
 
 from bigscreen_bridge.adapters import APPS
+from bigscreen_bridge.diagnostics import Recorder
 from bigscreen_bridge.server import Bridge, application
 
 # The integration is a separate repository; these tests run it against the real bridge.
@@ -40,3 +42,32 @@ async def bridge(aiohttp_client):
     return bridge, client
 
 
+class Clock:
+    """Wall clock and monotonic clock that only move when told to."""
+
+    def __init__(self):
+        self.wall = datetime(2026, 11, 17, 16, 42, 0, 123456, tzinfo=timezone.utc)
+        self.mono = 1000.0
+
+    def __call__(self):
+        return self.wall
+
+    def monotonic(self):
+        return self.mono
+
+    def tick(self, seconds):
+        self.wall += timedelta(seconds=seconds)
+        self.mono += seconds
+
+
+@pytest.fixture
+def clock():
+    return Clock()
+
+
+@pytest.fixture
+def recorder(clock):
+    recorder = Recorder(clock=clock, monotonic=clock.monotonic)
+    recorder.install()
+    yield recorder
+    recorder.uninstall()

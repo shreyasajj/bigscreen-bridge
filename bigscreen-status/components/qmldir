@@ -1,0 +1,11 @@
+singleton Ui 1.0 Ui.qml
+Card 1.0 Card.qml
+Pill 1.0 Pill.qml
+Tile 1.0 Tile.qml
+Bar 1.0 Bar.qml
+OverviewSection 1.0 OverviewSection.qml
+AppSection 1.0 AppSection.qml
+MprisSection 1.0 MprisSection.qml
+CommandsSection 1.0 CommandsSection.qml
+WarningsSection 1.0 WarningsSection.qml
+PairingSection 1.0 PairingSection.qml

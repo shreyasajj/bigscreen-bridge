@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Bridge Status
+Comment=Read-only status of Bigscreen Bridge and its app hooks
+Exec=@DIR@/run.sh
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;
+X-KDE-FormFactors=mediacenter

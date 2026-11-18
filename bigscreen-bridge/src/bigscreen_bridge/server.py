@@ -23,11 +23,14 @@ from .power import PowerManager
 from .sessions import SessionController
 
 from .config import load_config
+from .diagnostics import Recorder, close_reason
 from .discovery import advertise
+from .pairing import Pairing
 from .mqtt import MqttLink, settings as mqtt_settings
 from .deep_links import parse_uri
 from .adapters import APPS, BridgeError
 from .kwin import KWin
+from .status import PATH as STATUS_PATH, PairingInterface, StatusInterface, StatusSignal
 from .couchside import CouchsideHook, KINDS, validate_content
 from .vacuumtube import VacuumTubeHook, validate_content as validate_youtube, validate_volume
 from .flimmer import FlimmerHook, validate_channel
@@ -129,12 +132,16 @@ ADAPTERS = {adapter.app: adapter for adapter in (
 
 
 class Bridge:
-    def __init__(self, config, wm, launcher=launch_app):
+    def __init__(self, config, wm, launcher=launch_app, diagnostics=None, pairing=None):
         self.config = config
+        self.pairing = pairing
         self.wm = wm
         self.launcher = launcher
+        self.diagnostics = diagnostics or Recorder()
+        self.diagnostics.protect(config.get("token"))
         self.installed = set()
         self.clients = set()
+        self.close_reasons = {}         # client -> why the bridge itself dropped it
         self.publishers = []            # extra transports told about every state change
         self.lock = asyncio.Lock()
         self.launch_tasks = {}
@@ -201,7 +208,19 @@ class Bridge:
             snapshot['paused_by_bridge'] = list(self.sessions.receipts)
         return copy.deepcopy(snapshot)
 
+    def status(self):
+        """The token-free local read: what clients are sent, plus the bridge's own diagnostics."""
+        return {"snapshot": self.snapshot(), "diagnostics": self.diagnostics.to_dict(self),
+                "pairing": self.pairing.public() if self.pairing else None}
+
+    def authorized(self, header):
+        expected = "Bearer " + self.config["token"]
+        if hmac.compare_digest(header.encode(), expected.encode()):
+            return True
+        return bool(self.pairing and header.startswith("Bearer ") and self.pairing.accepts(header[7:]))
+
     async def notify(self):
+        self.diagnostics.changed()
         if self.clients:
             await asyncio.gather(*(self.send(c, self.snapshot()) for c in list(self.clients)))
         for publish in list(self.publishers):
@@ -214,7 +233,9 @@ class Bridge:
         try:
             async with asyncio.timeout(5):
                 await client.send_json(data)
-        except (ConnectionError, RuntimeError, TimeoutError):
+        except (ConnectionError, RuntimeError, TimeoutError) as exc:
+            if client in self.clients:
+                self.close_reasons[client] = "send_timeout" if isinstance(exc, TimeoutError) else "connection_lost"
             self.clients.discard(client)
             await client.close()
 
@@ -265,6 +286,10 @@ class Bridge:
                         if need_control and (not hook.state or not hook.state.get("ready")):
                             windows = []
             except TimeoutError as exc:
+                if need_control and any(app.matches(w) for w in self.wm.windows):
+                    # The app is up, but this build (or this start) never offered its control endpoint.
+                    raise BridgeError("readiness_timeout",
+                                      "Application window appeared but its control endpoint did not answer") from exc
                 raise BridgeError("readiness_timeout", "Application did not acquire a window") from exc
         window = next((w for w in windows if w.get("active")), windows[0])
         await self.wm.focus(window["id"])
@@ -288,7 +313,15 @@ class Bridge:
             raise BridgeError("window_manager_unavailable", "No authoritative window snapshot")
         async with self.lock:
             await self._focus(app)
-            result = await getattr(hook, adapter.deliver)(request["id"], *arguments)
+            try:
+                result = await getattr(hook, adapter.deliver)(request["id"], *arguments)
+            except BridgeError as exc:
+                self.diagnostics.hook_error(hook, exc)
+                raise
+            if adapter.app == "couchside":
+                # The kind and request only: Music Assistant URIs and search text stay out of the journal.
+                LOG.info("Couchside acknowledged navigation to %s (request %s)",
+                         request["content_type"], request["id"][:8])
             # UI navigation cannot bypass Wayland's focus policy; KWin confirms it.
             await self._focus(app)
             await self.notify()
@@ -318,7 +351,11 @@ class Bridge:
                 raise BridgeError("invalid_request", "Muted must be boolean")
             kwargs["muted"] = request["muted"]
         async with self.lock:
-            result = await hook.control(request["id"], command, **kwargs)
+            try:
+                result = await hook.control(request["id"], command, **kwargs)
+            except BridgeError as exc:
+                self.diagnostics.hook_error(hook, exc)
+                raise
             await self.notify()
             return result
 
@@ -346,6 +383,10 @@ class Bridge:
                 raise BridgeError('unsupported', 'The requested system module is unavailable')
             await self.notify()
             return result
+        if command == "diagnostics":
+            if request.keys() - {"id", "command"}:
+                raise BridgeError("invalid_request", "Unexpected command arguments")
+            return self.diagnostics.to_dict(self)
         if command not in ("get_state", "browse", "focus", "open", "open_uri", "play", "pause", "stop", "seek", "volume_set", "volume_mute"):
             raise BridgeError("unsupported", "Command is not supported")
         allowed = {"id", "command", "app"} if command == "focus" else {"id", "command"}
@@ -396,13 +437,14 @@ class Bridge:
                               for a in APPS if a.flatpak in self.installed]}
         return self.snapshot()
 
-    async def handle(self, payload, cache):
+    async def handle(self, payload, cache, transport="websocket"):
         """Run one JSON request from any transport and return its acknowledgement.
 
         `cache` is the caller's per-connection memory that makes retries idempotent.
         """
         request_id = None
         data = None
+        entry = None
         try:
             data = json.loads(payload)
             if not isinstance(data, dict):
@@ -411,11 +453,11 @@ class Bridge:
             if not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
                 request_id = None
                 raise BridgeError("invalid_request", "A request ID is required")
+            if request_id in cache and data == cache[request_id][0]:
+                return cache[request_id][1]   # a retry: answered and recorded once already
+            entry = self.diagnostics.command_started(request_id, data, transport)
             if request_id in cache:
-                original, response = cache[request_id]
-                if data != original:
-                    raise BridgeError("invalid_request", "Request ID reused with different data")
-                return response
+                raise BridgeError("invalid_request", "Request ID reused with different data")
             result = await self.execute(data)
             response = {"type": "result", "id": request_id, "ok": True, "result": result}
         except (json.JSONDecodeError, BridgeError) as exc:
@@ -426,35 +468,76 @@ class Bridge:
             LOG.exception("Request failed")
             response = {"type": "result", "id": request_id, "ok": False,
                         "error": {"code": "internal_error", "message": "Bridge operation failed"}}
+        if entry is None:
+            entry = self.diagnostics.command_started(request_id, data, transport)
+        self.diagnostics.command_finished(entry, response, id(cache))
+        if not response["ok"]:
+            self._log_failure(entry, response)
         if request_id and request_id not in cache:
             cache[request_id] = (data, response)
             if len(cache) > 128:
                 cache.popitem(last=False)
         return response
 
+    @staticmethod
+    def _log_failure(entry, response):
+        """One journal line per failed request, from the recorder's sanitized names only."""
+        entry = entry or {}
+        code = (entry.get("error_code") or "error")
+        # A client's own mistake is routine; anything else means the TV could not do what was asked.
+        level = logging.INFO if code in ("invalid_request", "unsupported") else logging.WARNING
+        LOG.log(level, "Request %s failed: %s %s via %s (%s)", (entry.get("id") or "-")[:8],
+                entry.get("command") or "-", entry.get("app") or "system", entry.get("transport") or "-", code)
+
+    async def pair(self, request):
+        """Swap the code shown on the TV for this client's own token. No browser origins."""
+        status = {"invalid_request": 400, "invalid_code": 403, "too_many_clients": 409, "rate_limited": 429}
+        try:
+            if request.headers.get("Origin"):
+                raise BridgeError("invalid_request", "Browser origins cannot pair")
+            if not self.pairing:
+                raise BridgeError("unsupported", "Pairing is not available")
+            try:
+                body = await request.json()
+            except ValueError as exc:
+                raise BridgeError("invalid_request", "Expected a JSON object") from exc
+            if not isinstance(body, dict) or body.keys() - {"code", "name"}:
+                raise BridgeError("invalid_request", "Expected code and name only")
+            token = self.pairing.redeem(body.get("code"), body.get("name"))
+        except BridgeError as exc:
+            return web.json_response({"ok": False, "error": {"code": exc.code, "message": str(exc)}},
+                                     status=status.get(exc.code, 404))
+        return web.json_response({"ok": True, "token": token, "device_id": self.config["device_id"],
+                                  "name": self.config.get("name", socket.gethostname())})
+
     async def websocket(self, request):
-        supplied = request.headers.get("Authorization", "")
-        expected = "Bearer " + self.config["token"]
-        if request.headers.get("Origin") or not hmac.compare_digest(supplied.encode(), expected.encode()):
+        if request.headers.get("Origin") or not self.authorized(request.headers.get("Authorization", "")):
             raise web.HTTPUnauthorized()
         ws = web.WebSocketResponse(max_msg_size=16384, heartbeat=20)
         await ws.prepare(request)
         self.clients.add(ws)
+        self.diagnostics.ws_connected()
         cache = OrderedDict()
+        unexpected = False
         await self.send(ws, self.snapshot())
         try:
             async for msg in ws:
                 if msg.type != web.WSMsgType.TEXT:
+                    unexpected = msg.type != web.WSMsgType.ERROR
                     break
                 await self.send(ws, await self.handle(msg.data, cache))
         finally:
             self.clients.discard(ws)
+            reason = self.close_reasons.pop(ws, None) or close_reason(ws, unexpected)
+            self.diagnostics.ws_disconnected(reason)
+            LOG.info("WebSocket client closed (%s)", reason)
         return ws
 
 
 def application(bridge):
     app = web.Application(client_max_size=16384)
     app.router.add_get("/ws", bridge.websocket)
+    app.router.add_post("/pair", bridge.pair)
 
     async def health(request):
         return web.json_response({"ok": bridge.wm.ready.is_set(), "protocol": 1})
@@ -463,13 +546,15 @@ def application(bridge):
     return app
 
 
-async def serve(config_path):
+async def serve(config_path, diagnostics=None):
     config = load_config(config_path)
     mqtt_options = mqtt_settings(config)
     mqtt_link = None
     monitor = Path(config["monitor_path"])
     wm = KWin(monitor)
-    bridge = Bridge(config, wm)
+    bridge = Bridge(config, wm, diagnostics=diagnostics)
+    bridge.pairing = Pairing(Path(config_path).parent / "clients.json", changed=bridge.diagnostics.changed)
+    wm.recorder = bridge.diagnostics
     notification = None
 
     def changed():
@@ -488,11 +573,20 @@ async def serve(config_path):
     try:
         bridge.installed = set((await process("flatpak", "list", "--app", "--columns=application")).splitlines())
         await wm.start()
+        bridge.diagnostics.started(config.get("port", 8765))
+        # A second, read-only interface on the name the KWin receiver already owns.
+        status = StatusInterface(lambda: json.dumps(bridge.status()))
+        wm.bus.export(STATUS_PATH, status)
+        wm.bus.export(STATUS_PATH, PairingInterface(bridge.pairing.start))
+        bridge.diagnostics.listeners.append(StatusSignal(status.StatusChanged))
+        bridge.pairing.refresh()   # keep a code on screen while nothing has paired
         bridge.couchside = CouchsideHook(wm.bus, config.get("couchside_control", False))
         bridge.stremio = StremioHook(wm.bus, config.get("stremio_control", False))
         bridge.flimmer = FlimmerHook(wm.bus, config.get("flimmer_control", False))
         bridge.vacuumtube = VacuumTubeHook(config.get("vacuumtube_control", False))
         hooks = [getattr(bridge, app) for app in ADAPTERS]
+        for hook in hooks:
+            hook.recorder = bridge.diagnostics
 
         system_bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
         bridge.power = PowerManager(wm.bus, system_bus, config.get('power', {}), changed=changed)
@@ -527,7 +621,8 @@ async def serve(config_path):
                     jobs += [bridge.power.refresh(), bridge.audio.refresh()]
                 results = await asyncio.gather(*jobs, return_exceptions=True)
                 for failure in (r for r in results if isinstance(r, Exception)):
-                    LOG.warning("State refresh failed: %r", failure)
+                    LOG.warning("State refresh failed: %s (%s)", type(failure).__name__,
+                                getattr(failure, "code", "unexpected"))
                 if previous != significant(bridge.snapshot()):
                     await bridge.notify()
                 with contextlib.suppress(TimeoutError):
@@ -540,7 +635,7 @@ async def serve(config_path):
         await runner.setup()
         site = web.TCPSite(runner, config.get("host", "127.0.0.1"), config.get("port", 8765))
         await site.start()
-        await advertise(system_bus, config, socket.gethostname())
+        await advertise(system_bus, config, socket.gethostname(), bridge.diagnostics)
         if mqtt_options:
             mqtt_link = asyncio.create_task(MqttLink(bridge, mqtt_options).run())
         lost = asyncio.create_task(wm.lost.wait())
@@ -578,7 +673,11 @@ def main():
     parser.add_argument("--config", type=Path, required=True)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
+    diagnostics = Recorder()
+    diagnostics.install()
     try:
-        asyncio.run(serve(args.config))
+        asyncio.run(serve(args.config, diagnostics))
     except KeyboardInterrupt:
         pass
+    finally:
+        diagnostics.uninstall()

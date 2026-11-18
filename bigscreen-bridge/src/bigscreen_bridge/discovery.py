@@ -7,6 +7,7 @@ import ipaddress
 import logging
 
 from .adapters import BridgeError
+from .diagnostics import NULL
 from .runtime_io import call
 
 LOG = logging.getLogger(__name__)
@@ -32,10 +33,11 @@ def service_record(config, hostname):
             "txt": [f"{key}={value}".encode() for key, value in text.items()]}
 
 
-async def advertise(system_bus, config, hostname):
+async def advertise(system_bus, config, hostname, recorder=NULL):
     """Register the service; it disappears by itself when the bus connection closes."""
     record = service_record(config, hostname)
     if record is None:
+        recorder.discovery_result(None, SERVICE_TYPE)
         return None
     try:
         group = (await call(system_bus, AVAHI, "/", AVAHI + ".Server", "EntryGroupNew"))[0]
@@ -44,7 +46,9 @@ async def advertise(system_bus, config, hostname):
                    [-1, -1, 0, record["instance"], SERVICE_TYPE, "", "", record["port"], record["txt"]])
         await call(system_bus, AVAHI, group, AVAHI + ".EntryGroup", "Commit")
     except BridgeError as exc:
+        recorder.discovery_result(record, SERVICE_TYPE, str(exc))
         LOG.warning("Network discovery is unavailable: %s", exc)
         return None
+    recorder.discovery_result(record, SERVICE_TYPE)
     LOG.info("Announced %s on the local network", SERVICE_TYPE)
     return group
