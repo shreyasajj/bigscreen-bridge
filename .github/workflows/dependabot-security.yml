@@ -1,0 +1,66 @@
+name: Dependabot merge
+
+# When CI passes on a Dependabot security pull request (dependabot/pip/*), merge it
+# and publish the next rc pre-release. Only when Dependabot triggered that CI run and
+# wrote every commit, from this repository: a commit pushed onto the branch by anyone
+# else stops it. GitHub Actions bumps stay for review (the built-in token cannot merge
+# workflow-file changes). Merges made with the built-in token start no push or tag
+# workflows, so the release is started explicitly (a workflow_dispatch still runs).
+# The PR's code is never checked out here.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: dependabot-merge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/pip/')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Merge and release the security fix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          gh pr list --head "$HEAD_BRANCH" --state open \
+            --json number,author,headRefOid,statusCheckRollup,commits > "$RUNNER_TEMP/pr.json"
+          number=$(python3 - "$RUNNER_TEMP/pr.json" "$HEAD_SHA" <<'PY'
+          import json, sys
+          prs = json.load(open(sys.argv[1]))
+          if len(prs) != 1:
+              sys.exit(f"Expected one open pull request, found {len(prs)}")
+          pr = prs[0]
+          if pr["author"].get("login") not in ("app/dependabot", "dependabot[bot]"):
+              sys.exit("Not opened by Dependabot")
+          if any(author.get("login") != "dependabot[bot]"
+                 for commit in pr["commits"] for author in commit.get("authors") or [{}]):
+              sys.exit("A commit on the branch was not written by Dependabot")
+          if pr["headRefOid"] != sys.argv[2]:
+              sys.exit("The pull request has moved on since CI ran")
+          green = {"SUCCESS", "SKIPPED", "NEUTRAL"}
+          for check in pr["statusCheckRollup"]:
+              result = check.get("conclusion") or check.get("state")
+              if check.get("status") not in (None, "COMPLETED") or result not in green:
+                  sys.exit(f"Check {check.get('name') or check.get('context')} is {result or check.get('status')}")
+          print(pr["number"])
+          PY
+          )
+          gh pr merge "$number" --squash --match-head-commit "$HEAD_SHA"
+          gh workflow run release.yml -f prerelease=true
+          echo "Merged #$number and started a pre-release"

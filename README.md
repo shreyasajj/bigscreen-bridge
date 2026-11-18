@@ -44,25 +44,72 @@ sent a new snapshot only when something other than the playback clock changed.
 ## Install the KDE bridge
 
 Requirements: Plasma 6 graphical user session, Flatpak, Python >=3.12 with venv
-and pip, network access to install Python dependencies. No root access required.
-Run from this repository root **on the TV as its desktop user**:
+and pip, `curl`, network access to install Python dependencies. No root access
+required. Run **on the TV as its desktop user**:
 
 ```sh
-./scripts/install-tv.sh
+curl -fsSL https://github.com/shreyasajj/bigscreen-bridge/releases/latest/download/install.sh | sh
 systemctl --user status bigscreen-bridge
 curl http://127.0.0.1:8765/health
 ```
 
+Options go after `sh -s --`:
+
+| Option | Effect |
+| --- | --- |
+| `--prerelease` | install the newest release including pre-releases, and keep following them |
+| `--stable` | go back to stable releases only |
+| `--version 0.3.0` | install that release |
+| `--no-auto-update` | install, but turn the nightly update off |
+
+`install.sh` downloads the release, checks it against the release's `SHA256SUMS`,
+unpacks it to `~/.local/share/bigscreen-bridge/releases/<version>` and runs its
+`scripts/install-tv.sh`. From a checkout, `./scripts/install-tv.sh` does the same
+for the working tree. Running either again upgrades in place.
+
 Configuration is private at `~/.config/bigscreen-bridge/config.json`. It contains a
-persistent device UUID, generated token, name, bind address, port and monitor path.
-Installer preserves existing config and restarts the user service on upgrades.
-The service starts with the graphical session. User lingering alone cannot provide
-a working KWin session before login.
+persistent device UUID, generated token, name, bind address, port, monitor path and
+update settings. The installer preserves existing config and paired clients and
+restarts the user service on upgrades. Each version gets its own venv under
+`~/.local/share/bigscreen-bridge/venvs/`; `venv` links to the current one and the
+previous one is kept. The service starts with the graphical session. User lingering
+alone cannot provide a working KWin session before login.
+
+### Updates
+
+`bigscreen-bridge-update.timer` checks GitHub once a night (03:00, plus up to an
+hour of random delay; a missed run happens at the next boot). It installs a newer
+release only when nothing is playing: while any app or MPRIS player is playing it
+checks again every 10 minutes, for up to 4 hours, then tries the next night. After
+the restart it waits up to 60 s for `/health`; if the new version never becomes
+healthy it links `venv` back to the previous version and restarts that. Settings in
+`config.json`:
+
+```json
+"update": {"channel": "stable", "auto": true}
+```
+
+`"channel": "prerelease"` also takes pre-releases, which is where Dependabot
+security fixes appear first. `"auto": false` only reports.
+
+```sh
+~/.local/share/bigscreen-bridge/venv/bin/bigscreen-bridge-update --check   # what it would do
+~/.local/share/bigscreen-bridge/venv/bin/bigscreen-bridge-update --now     # update now, even during playback
+journalctl --user -u bigscreen-bridge-update                              # what it did
+```
+
+### Releases
+
+Pushing a tag `vX.Y.Z` that matches `pyproject.toml`'s version runs CI and publishes
+a GitHub release with `bigscreen-bridge-X.Y.Z.tar.gz`, `install.sh` and `SHA256SUMS`
+(a tag such as `v0.3.1rc1` makes a pre-release). When CI passes on a Dependabot
+security update, it is merged and released as the next `rc` pre-release
+automatically; TVs on the `prerelease` channel pick it up that night. GitHub Actions
+bumps from Dependabot are left open for review.
 
 ### Pairing
 
-Open **Bridge Status** from the Bigscreen launcher (install it with
-`bigscreen-status/launch.sh install`). Until a client has paired, its Pairing card
+Open **Bridge Status** from the Bigscreen launcher (the installer adds it). Until a client has paired, its Pairing card
 shows a code such as `7KQ4-MXD2`; type it into Home Assistant. The code lasts five
 minutes, works once, and is exchanged for that client's own token (stored on the TV
 only as a hash in `~/.config/bigscreen-bridge/clients.json`). After that the code
@@ -98,8 +145,9 @@ If another app initially has focus, the last tested target remains focused.
 Uninstall the bridge without touching app data:
 
 ```sh
-systemctl --user disable --now bigscreen-bridge
-rm ~/.config/systemd/user/bigscreen-bridge.service
+systemctl --user disable --now bigscreen-bridge bigscreen-bridge-update.timer
+rm ~/.config/systemd/user/bigscreen-bridge.service ~/.config/systemd/user/bigscreen-bridge-update.*
+rm ~/.local/share/applications/bigscreen-status.desktop
 systemctl --user daemon-reload
 ```
 

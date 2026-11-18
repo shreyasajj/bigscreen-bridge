@@ -1,0 +1,11 @@
+[Unit]
+Description=Bigscreen Bridge updater (newer GitHub release, never during playback)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/bigscreen-bridge/venv/bin/bigscreen-bridge-update
+# Waits up to 4 hours for playback to stop, then installs.
+TimeoutStartSec=5h
+UMask=0077
+NoNewPrivileges=true

@@ -1,0 +1,93 @@
+name: CI
+
+# The bridge runs on the TV's Python (3.12). Home Assistant's own tests need the
+# Python Home Assistant requires (3.14). Both check the integration out beside the
+# bridge (tests/conftest.py expects ../ha-bigscreen-bridge).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration-ref:
+    name: Pick the integration branch
+    runs-on: ubuntu-24.04
+    outputs:
+      ref: ${{ steps.pick.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: pick
+        env:
+          WANTED: ${{ github.head_ref || github.ref_name }}
+        run: |
+          # A same-named integration branch first, so a stacked pair tests together;
+          # then the branch named in .github/ha-integration-ref; then main.
+          url=https://github.com/shreyasajj/ha-bigscreen-bridge.git
+          pinned=$(cat .github/ha-integration-ref 2>/dev/null || true)
+          for ref in "$WANTED" "$pinned" main; do
+            if [ -n "$ref" ] && git ls-remote --exit-code --heads "$url" "$ref" >/dev/null; then
+              echo "ref=$ref" >> "$GITHUB_OUTPUT"
+              echo "Integration branch: $ref"
+              break
+            fi
+          done
+
+  bridge-py312:
+    name: Bridge (Python 3.12)
+    needs: integration-ref
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: bridge
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: bridge
+      - uses: actions/checkout@v7
+        with:
+          repository: shreyasajj/ha-bigscreen-bridge
+          ref: ${{ needs.integration-ref.outputs.ref }}
+          path: ha-bigscreen-bridge
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[test,mqtt]'
+      - name: Tests that do not import Home Assistant
+        # The integration package imports Home Assistant, which needs Python 3.14.
+        run: grep -L custom_components tests/test_*.py | xargs pytest -q
+      - run: ruff check bigscreen-bridge tests scripts
+      - name: Installer test
+        run: sh tests/test_install.sh
+
+  full-py314:
+    name: Bridge and Home Assistant (Python 3.14)
+    needs: integration-ref
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: bridge
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: bridge
+      - uses: actions/checkout@v7
+        with:
+          repository: shreyasajj/ha-bigscreen-bridge
+          ref: ${{ needs.integration-ref.outputs.ref }}
+          path: ha-bigscreen-bridge
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: pip install -e '.[test,ha-test,mqtt]'
+      - run: pytest -q
+
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: shellcheck install.sh scripts/*.sh bigscreen-status/*.sh tests/*.sh
