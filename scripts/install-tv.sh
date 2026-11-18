@@ -16,20 +16,28 @@ venvs="$install_root/venvs"
 mkdir -p "$install_root" "$venvs" "$config_root" "$units"
 chmod 700 "$config_root"
 
-# One venv per version; `venv` points at the current one, so rolling back is a relink.
+# A new venv for every install, under venvs/; `venv` points at the current one, so
+# rolling back is a relink. The link moves only after pip has succeeded, so a failed
+# install leaves the working venv in use. Scripts in a venv hold its absolute path,
+# so a venv is never renamed once built.
 if [ -d "$install_root/venv" ] && [ ! -L "$install_root/venv" ]; then
     rm -rf "$venvs/previous"
     mv "$install_root/venv" "$venvs/previous"
 fi
-target="$venvs/$version"
-rm -rf "$target"
+previous=$(readlink "$install_root/venv" 2>/dev/null || true)
+[ -n "$previous" ] || previous="$venvs/previous"
+target="$venvs/$version-$(date +%Y%m%d%H%M%S)-$$"
 python3 -m venv "$target"
-"$target/bin/pip" install --quiet ".[mqtt]"
+if ! "$target/bin/pip" install --quiet ".[mqtt]"; then
+    rm -rf "$target"
+    echo "pip install failed; the bridge still runs the previous version" >&2
+    exit 1
+fi
 ln -sfn "$target" "$install_root/venv"
-# Keep the current venv and the newest other one. Names are versions, so ls is safe.
-# shellcheck disable=SC2010
-for old in $(ls -t "$venvs" | grep -vx "$version" | tail -n +2); do
-    rm -rf "${venvs:?}/$old"
+# Keep the new venv and the one linked before it (the rollback target); drop the rest.
+for old in "$venvs"/*; do
+    [ -e "$old" ] || continue
+    [ "$old" = "$target" ] || [ "$old" = "$previous" ] || rm -rf "$old"
 done
 
 cp bigscreen-bridge/kwin/monitor.js "$install_root/monitor.js"

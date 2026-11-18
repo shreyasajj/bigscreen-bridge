@@ -104,7 +104,8 @@ Pushing a tag `vX.Y.Z` that matches `pyproject.toml`'s version runs CI and publi
 a GitHub release with `bigscreen-bridge-X.Y.Z.tar.gz`, `install.sh` and `SHA256SUMS`
 (a tag such as `v0.3.1rc1` makes a pre-release). When CI passes on a Dependabot
 security update, it is merged and released as the next `rc` pre-release
-automatically; TVs on the `prerelease` channel pick it up that night.
+automatically; TVs on the `prerelease` channel pick it up that night. GitHub Actions
+bumps from Dependabot are left open for review.
 
 ### Pairing
 
@@ -244,8 +245,9 @@ python3.14 -m venv .venv
 
 HA contract tests use Home Assistant 2026.2.3, the version available from the package
 index during this milestone. This does not establish compatibility with the actual
-HA host, whose version is unknown. On Python 3.12/Linux, bridge-only testing can use
-`.[test]` with `pytest --ignore=tests/test_homeassistant.py`.
+HA host, whose version is unknown. On Python 3.12 (the TV's), install `.[test]` and run
+the tests that do not import the integration, whose package needs Home Assistant:
+`grep -L custom_components tests/test_*.py | xargs pytest -q`.
 Ignored `upstream/` checkouts are source audit references only. The application
 changes live on the `bigscreen-bridge` branch of each app repository listed in
 [config/repositories.json](config/repositories.json); `patches/` is an export of

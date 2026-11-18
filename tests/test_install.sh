@@ -15,7 +15,7 @@ cat > "$work/bin/python3" <<EOF
 #!/bin/sh
 if [ "\$1" = -m ] && [ "\$2" = venv ]; then
     mkdir -p "\$3/bin"
-    printf '#!/bin/sh\necho "pip \$*" >> "$LOG"\n' > "\$3/bin/pip"
+    printf '#!/bin/sh\necho "pip \$*" >> "$LOG"\n[ -z "\$FAIL_PIP" ] || exit 1\n' > "\$3/bin/pip"
     printf '#!/bin/sh\nPYTHONPATH="$repo/bigscreen-bridge/src" exec "$real_python" "\$@"\n' > "\$3/bin/python"
     chmod +x "\$3/bin/pip" "\$3/bin/python"
     exit 0
@@ -40,8 +40,9 @@ echo '{"clients": []}' > "$(dirname "$config")/clients.json"
 
 sh scripts/install-tv.sh > "$work/out.log" 2>&1 || { cat "$work/out.log"; fail "install-tv.sh exited non-zero"; }
 
+linked() { readlink "$share/venv"; }
 [ -L "$share/venv" ] || fail "venv is not a symlink"
-[ "$(readlink "$share/venv")" = "$share/venvs/$version" ] || fail "venv points at $(readlink "$share/venv")"
+case "$(linked)" in "$share/venvs/$version-"*) ;; *) fail "venv points at $(linked)" ;; esac
 [ "$(cat "$share/venvs/previous/marker")" = old ] || fail "the old venv was not kept as venvs/previous"
 "$real_python" - "$config" <<'PY' || fail "config not merged"
 import json, sys
@@ -50,7 +51,7 @@ assert c["device_id"] == "kept" and c["token"] == "kept-token", c
 assert c["update"] == {"channel": "stable", "auto": True}, c["update"]
 PY
 [ -f "$(dirname "$config")/clients.json" ] || fail "clients.json lost"
-[ "$(stat -f %Lp "$config" 2>/dev/null || stat -c %a "$config")" = 600 ] || fail "config is not 0600"
+[ "$(stat -c %a "$config" 2>/dev/null || stat -f %Lp "$config")" = 600 ] || fail "config is not 0600"
 [ -f "$HOME/.local/share/bigscreen-status/main.qml" ] || fail "status screen not installed"
 desktop="$HOME/.local/share/applications/bigscreen-status.desktop"
 grep -q "$HOME/.local/share/bigscreen-status" "$desktop" || fail "status launcher not written"
@@ -67,12 +68,20 @@ BIGSCREEN_UPDATE_CHANNEL=prerelease BIGSCREEN_AUTO_UPDATE=0 sh scripts/install-t
     || fail "flags not written"
 grep -q "disable --now bigscreen-bridge-update.timer" "$LOG" || fail "timer not disabled"
 
-# Older venvs are pruned: the current one and one other stay.
-mkdir -p "$share/venvs/0.0.1" "$share/venvs/0.0.2"
+# Pruning keeps the new venv and the one that was linked before it, even when another
+# venv is newer (a release that failed and was rolled back from).
+before=$(linked)
+sleep 1; mkdir -p "$share/venvs/0.0.1"; sleep 1; mkdir -p "$share/venvs/9.0.0-failed"
 sh scripts/install-tv.sh > "$work/out.log" 2>&1 || { cat "$work/out.log"; fail "third install exited non-zero"; }
 count=$(find "$share/venvs" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
-[ "$count" = 2 ] || fail "$count venvs kept, expected 2"
-[ -d "$share/venvs/$version" ] || fail "current venv pruned"
+[ "$count" = 2 ] || fail "$count venvs kept, expected 2: $(ls "$share/venvs")"
+[ -d "$before" ] || fail "the previously linked venv was pruned"
+[ -d "$(linked)" ] && [ "$(linked)" != "$before" ] || fail "no new venv linked"
+
+# A re-run whose pip fails leaves the working venv linked and in place.
+before=$(linked)
+if FAIL_PIP=1 sh scripts/install-tv.sh > "$work/out.log" 2>&1; then fail "a failed pip was not reported"; fi
+[ "$(linked)" = "$before" ] && [ -d "$before" ] || fail "a failed pip broke the linked venv"
 "$real_python" -c "import json,sys; u=json.load(open(sys.argv[1]))['update']; assert u == {'channel': 'prerelease', 'auto': False}, u" "$config" \
     || fail "a plain re-run changed the update settings"
 
@@ -92,7 +101,7 @@ cat > "$fake/latest" <<EOF
  {"name": "SHA256SUMS", "browser_download_url": "file://$fake/SHA256SUMS"}]}
 EOF
 BIGSCREEN_RELEASES_API="file://$fake" sh install.sh > "$work/out.log" 2>&1 || { cat "$work/out.log"; fail "install.sh exited non-zero"; }
-[ "$(readlink "$share/venv")" = "$share/venvs/9.9.9" ] || fail "install.sh did not install 9.9.9"
+case "$(linked)" in "$share/venvs/9.9.9-"*) ;; *) fail "install.sh did not install 9.9.9" ;; esac
 [ -f "$share/releases/9.9.9/scripts/install-tv.sh" ] || fail "release not unpacked"
 "$real_python" -c "import json,sys; c=json.load(open(sys.argv[1])); assert c['token'] == 'kept-token' and c['update']['channel'] == 'prerelease', c" "$config" \
     || fail "install.sh changed the config"

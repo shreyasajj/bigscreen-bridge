@@ -1,11 +1,12 @@
 name: Dependabot merge
 
-# When CI passes on a Dependabot pull request:
-#   dependabot/pip/*             a security fix: merge it, then publish the next rc pre-release
-#   dependabot/github_actions/*  CI tooling: merge it, nothing to release
-# Merges made with the built-in token start no push or tag workflows, so the release
-# is started explicitly (a workflow_dispatch still runs). The PR's code is never
-# checked out here.
+# When CI passes on a Dependabot security pull request (dependabot/pip/*), merge it
+# and publish the next rc pre-release. Only when Dependabot triggered that CI run and
+# wrote every commit, from this repository: a commit pushed onto the branch by anyone
+# else stops it. GitHub Actions bumps stay for review (the built-in token cannot merge
+# workflow-file changes). Merges made with the built-in token start no push or tag
+# workflows, so the release is started explicitly (a workflow_dispatch still runs).
+# The PR's code is never checked out here.
 on:
   workflow_run:
     workflows: [CI]
@@ -25,23 +26,20 @@ jobs:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
-      startsWith(github.event.workflow_run.head_branch, 'dependabot/')
+      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/pip/')
     runs-on: ubuntu-24.04
     steps:
-      - name: Merge, and release a security fix
+      - name: Merge and release the security fix
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          case "$HEAD_BRANCH" in
-            dependabot/pip/*) release=true ;;
-            dependabot/github_actions/*) release=false ;;
-            *) echo "Not a branch this workflow merges: $HEAD_BRANCH"; exit 0 ;;
-          esac
           gh pr list --head "$HEAD_BRANCH" --state open \
-            --json number,author,headRefOid,statusCheckRollup > "$RUNNER_TEMP/pr.json"
+            --json number,author,headRefOid,statusCheckRollup,commits > "$RUNNER_TEMP/pr.json"
           number=$(python3 - "$RUNNER_TEMP/pr.json" "$HEAD_SHA" <<'PY'
           import json, sys
           prs = json.load(open(sys.argv[1]))
@@ -50,6 +48,9 @@ jobs:
           pr = prs[0]
           if pr["author"].get("login") not in ("app/dependabot", "dependabot[bot]"):
               sys.exit("Not opened by Dependabot")
+          if any(author.get("login") != "dependabot[bot]"
+                 for commit in pr["commits"] for author in commit.get("authors") or [{}]):
+              sys.exit("A commit on the branch was not written by Dependabot")
           if pr["headRefOid"] != sys.argv[2]:
               sys.exit("The pull request has moved on since CI ran")
           green = {"SUCCESS", "SKIPPED", "NEUTRAL"}
@@ -61,9 +62,5 @@ jobs:
           PY
           )
           gh pr merge "$number" --squash --match-head-commit "$HEAD_SHA"
-          if [ "$release" = true ]; then
-            gh workflow run release.yml -f prerelease=true
-            echo "Merged #$number and started a pre-release"
-          else
-            echo "Merged #$number"
-          fi
+          gh workflow run release.yml -f prerelease=true
+          echo "Merged #$number and started a pre-release"

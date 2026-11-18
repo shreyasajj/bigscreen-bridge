@@ -128,6 +128,14 @@ def run(config_path, *, installed, root, fetch, read_status, install, health, re
         log(f"Up to date ({installed}, {settings['channel']} channel)")
         return 0
     version = release["tag_name"].lstrip("v")
+    state = Path(root) / "update-state.json"
+    try:
+        failed = json.loads(state.read_text()).get("failed")
+    except (OSError, ValueError, AttributeError):
+        failed = None
+    if failed == version:
+        log(f"Skipping {version}: it failed before; waiting for a newer release")
+        return 0
     if check or not settings["auto"]:
         reason = "check only" if check else "automatic updates are off"
         log(f"Update available: {installed} -> {version} ({reason})")
@@ -149,11 +157,18 @@ def run(config_path, *, installed, root, fetch, read_status, install, health, re
     try:
         install(release)
         if health():
+            state.unlink(missing_ok=True)
             log(f"Updated {installed} -> {version}")
             return 0
         problem = "the bridge did not become healthy"
     except UpdateError as exc:
         problem = str(exc)
+    except Exception as exc:     # anything else after the install has begun must still roll back
+        problem = f"unexpected {type(exc).__name__}"
+    try:
+        state.write_text(json.dumps({"failed": version}))
+    except OSError:
+        pass
     if previous and (not link.is_symlink() or os.readlink(link) != previous):
         _relink(root, previous)
         restart()
@@ -219,19 +234,28 @@ def make_install(root):
     return install
 
 
+def health_url(config_path):
+    """Where the bridge answers: its configured host, or loopback when it listens on every address."""
+    try:
+        config = json.loads(Path(config_path).read_text())
+        host, port = config.get("host") or "0.0.0.0", int(config.get("port", 8765))
+    except (OSError, ValueError, AttributeError):
+        host, port = "0.0.0.0", 8765
+    host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(host, host)
+    return f"http://{f'[{host}]' if ':' in host else host}:{port}/health"
+
+
 def make_health(config_path):
     def health():
-        try:
-            port = int(json.loads(Path(config_path).read_text()).get("port", 8765))
-        except (OSError, ValueError):
-            port = 8765
+        url = health_url(config_path)
         deadline = time.monotonic() + HEALTH_SECONDS
         while time.monotonic() < deadline:
             try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=3) as response:
-                    if json.loads(response.read()).get("ok"):
+                with urllib.request.urlopen(url, timeout=3) as response:
+                    body = json.loads(response.read())
+                    if isinstance(body, dict) and body.get("ok"):
                         return True
-            except (OSError, ValueError):
+            except Exception:        # not up yet, or an odd reply: keep waiting until the deadline
                 pass
             time.sleep(2)
         return False

@@ -166,3 +166,34 @@ def test_auto_false_and_check_mode_only_report(tmp_path):
 def test_up_to_date_says_so(tmp_path):
     tv = Tv(tmp_path, releases=[])
     assert tv.run() == 0 and tv.installed == [] and "up to date" in tv.lines[-1].lower()
+
+
+def test_an_unexpected_failure_after_install_still_rolls_back(tmp_path):
+    tv = Tv(tmp_path)
+    def broken_health():
+        raise AttributeError("'list' object has no attribute 'get'")
+    assert run(tv.config, installed="0.3.0", root=tv.root, fetch=tv.fetch, read_status=tv.read_status,
+               install=tv.install, health=broken_health, restart=tv.restart, sleep=tv.sleeps.append,
+               log=tv.lines.append) == 1
+    assert (tv.root / "venv").resolve() == (tv.root / "venvs" / "0.3.0").resolve() and tv.restarts == 1
+
+
+def test_a_release_that_failed_is_skipped_until_a_newer_one(tmp_path):
+    tv = Tv(tmp_path, healthy=False)
+    assert tv.run() == 1 and tv.installed == ["v0.3.1"]
+    tv.healthy = True
+    assert tv.run() == 0 and tv.installed == ["v0.3.1"]          # not retried
+    assert "0.3.1" in tv.lines[-1] and "failed before" in tv.lines[-1]
+    tv.releases.append({"tag_name": "v0.3.2", "prerelease": False, "draft": False})
+    tv.install = lambda release: tv.installed.append(release["tag_name"])
+    assert tv.run() == 0 and tv.installed == ["v0.3.1", "v0.3.2"]
+
+
+@pytest.mark.parametrize(("host", "expected"), [("0.0.0.0", "127.0.0.1"), ("192.168.30.153", "192.168.30.153"),
+                                                 (None, "127.0.0.1"), ("::", "::1")])
+def test_health_asks_the_address_the_bridge_listens_on(tmp_path, host, expected):
+    from bigscreen_bridge.update import health_url
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"port": 9000, **({"host": host} if host else {})}))
+    wanted = f"[{expected}]" if ":" in expected else expected
+    assert health_url(config) == f"http://{wanted}:9000/health"
