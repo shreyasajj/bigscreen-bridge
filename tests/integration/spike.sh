@@ -51,11 +51,14 @@ wait_for 60 "bridge Status on the session bus" \
 
 step "install Couchside"
 as_tv 'flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo'
-# GitHub Pages, which hosts the Couchside repo, sometimes answers 503; try a few times.
-for attempt in 1 2 3 4; do
+# GitHub Pages, which hosts the Couchside repo, rate-limits the many small object fetches
+# (503, 429). Flatpak keeps what it already fetched, so back off and continue.
+delay=30
+for attempt in 1 2 3 4 5 6; do
     as_tv 'flatpak install --user -y --noninteractive https://shreyasajj.github.io/couchside/couchside.flatpakref' && break
-    [ "$attempt" -lt 4 ] || exit 1
-    echo "Couchside download failed (attempt $attempt); retrying"; sleep 15
+    [ "$attempt" -lt 6 ] || exit 1
+    echo "Couchside download failed (attempt $attempt); retrying in ${delay}s"; sleep "$delay"
+    delay=$((delay * 2))
 done
 
 step "open Couchside"
