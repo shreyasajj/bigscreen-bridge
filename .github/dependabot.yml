@@ -1,0 +1,9 @@
+version: 2
+# No pip entry on purpose: with pip version updates off, every pip pull request
+# from Dependabot is a security update (enabled in the repository settings), and
+# .github/workflows/dependabot-security.yml merges it and publishes a pre-release.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
