@@ -377,3 +377,77 @@ async def test_downloaded_diagnostics_never_hold_the_token(coordinator, bridge, 
     report = await async_get_config_entry_diagnostics(coordinator.hass, coordinator.entry)
     assert "a" * 48 not in str(report)
     assert report["bridge_diagnostics"]["service"]["version"] and report["state"]["device_id"] == "test-device"
+
+
+def config_entry(http, token="a" * 48):
+    from types import MappingProxyType
+    from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+    entry = ConfigEntry(data={"url": str(http.make_url("")), "token": token}, discovery_keys=MappingProxyType({}),
+                        domain="bigscreen_bridge", minor_version=1, options={}, source="user",
+                        subentries_data=None, title="TV", unique_id="test-device", version=1,
+                        state=ConfigEntryState.SETUP_IN_PROGRESS)
+    return entry
+
+
+@pytest.fixture
+async def hass_with_entries(tmp_path, monkeypatch):
+    hass = HomeAssistant(str(tmp_path))
+    session = aiohttp.ClientSession()
+    monkeypatch.setattr("custom_components.bigscreen_bridge.coordinator.async_get_clientsession", lambda _: session)
+    hass.config_entries = SimpleNamespace(async_forward_entry_setups=AsyncMock(),
+                                          async_unload_platforms=AsyncMock(return_value=True),
+                                          async_reload=AsyncMock())
+    yield hass
+    await session.close()
+
+
+async def test_setup_entry_forwards_every_platform_and_unload_closes(bridge, hass_with_entries):
+    from custom_components.bigscreen_bridge import PLATFORMS, async_setup_entry, async_unload_entry
+    from homeassistant.const import Platform
+    _, http = bridge
+    hass, entry = hass_with_entries, config_entry(http)
+    assert await async_setup_entry(hass, entry)
+    hass.config_entries.async_forward_entry_setups.assert_awaited_once_with(entry, PLATFORMS)
+    assert set(PLATFORMS) == {Platform.MEDIA_PLAYER, Platform.SENSOR, Platform.BINARY_SENSOR, Platform.SWITCH,
+                              Platform.LIGHT, Platform.SCENE}
+    client = entry.runtime_data.client
+    assert not client.ws.closed
+    assert await async_unload_entry(hass, entry)
+    assert client.ws.closed
+
+
+async def test_setup_with_a_revoked_token_asks_for_reauth(bridge, hass_with_entries):
+    from custom_components.bigscreen_bridge import async_setup_entry
+    _, http = bridge
+    with pytest.raises(ConfigEntryAuthFailed):
+        await async_setup_entry(hass_with_entries, config_entry(http, token="b" * 48))
+    hass_with_entries.config_entries.async_forward_entry_setups.assert_not_awaited()
+
+
+async def test_setup_closes_the_connection_when_platforms_fail(bridge, hass_with_entries):
+    from custom_components.bigscreen_bridge import async_setup_entry
+    _, http = bridge
+    entry = config_entry(http)
+    hass_with_entries.config_entries.async_forward_entry_setups.side_effect = RuntimeError("platform broke")
+    with pytest.raises(RuntimeError):
+        await async_setup_entry(hass_with_entries, entry)
+    assert entry.runtime_data.client.ws.closed
+
+
+async def test_unload_refused_keeps_the_connection(bridge, hass_with_entries):
+    from custom_components.bigscreen_bridge import async_setup_entry, async_unload_entry
+    _, http = bridge
+    entry = config_entry(http)
+    await async_setup_entry(hass_with_entries, entry)
+    hass_with_entries.config_entries.async_unload_platforms.return_value = False
+    assert not await async_unload_entry(hass_with_entries, entry)
+    assert not entry.runtime_data.client.ws.closed
+    await entry.runtime_data.async_close()
+
+
+async def test_options_change_reloads_the_entry(bridge, hass_with_entries):
+    from custom_components.bigscreen_bridge import async_reload_entry
+    _, http = bridge
+    entry = config_entry(http)
+    await async_reload_entry(hass_with_entries, entry)
+    hass_with_entries.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)

@@ -16,7 +16,7 @@ ha-test = [
     "homeassistant==2026.11.2; python_version >= '3.14'",
     "home-assistant-frontend==20261028.6; python_version >= '3.14'",
 ]
-test = ["pytest>=8", "pytest-asyncio>=0.24", "pytest-aiohttp>=1.0", "ruff>=0.9"]
+test = ["pytest>=8", "pytest-asyncio>=0.24", "pytest-aiohttp>=1.0", "pytest-cov>=6", "ruff>=0.9"]
 
 [project.scripts]
 bigscreen-bridge = "bigscreen_bridge.server:main"
@@ -33,6 +33,15 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 # The Home Assistant integration lives in its own repository, checked out next to this one.
 pythonpath = [".", "../ha-bigscreen-bridge"]
+
+[tool.coverage.run]
+# Paths rather than package names: the integration is a sibling checkout, put on the path by
+# tests/conftest.py after coverage starts, and tests/test_bridge.py loads its client by file.
+source = ["bigscreen-bridge/src/bigscreen_bridge", "../ha-bigscreen-bridge/custom_components/bigscreen_bridge"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
 
 [tool.ruff]
 line-length = 110

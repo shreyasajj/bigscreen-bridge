@@ -59,7 +59,11 @@ jobs:
       - run: pip install -e '.[test,mqtt]'
       - name: Tests that do not import Home Assistant
         # The integration package imports Home Assistant, which needs Python 3.14.
-        run: grep -L custom_components tests/test_*.py | xargs pytest -q
+        run: grep -L custom_components tests/test_*.py | xargs pytest -q --cov --cov-report=term
+      - name: Coverage summary
+        if: always()
+        run: |
+          { echo '### Coverage, Python 3.12 (bridge tests only)'; echo '```'; coverage report; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - run: ruff check bigscreen-bridge tests scripts
       - name: Installer test
         run: sh tests/test_install.sh
@@ -84,7 +88,11 @@ jobs:
         with:
           python-version: "3.14"
       - run: pip install -e '.[test,ha-test,mqtt]'
-      - run: pytest -q
+      - run: pytest -q --cov --cov-report=term --cov-report=xml
+      - name: Coverage summary
+        if: always()
+        run: |
+          { echo '### Coverage, Python 3.14 (bridge and Home Assistant)'; echo '```'; coverage report; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   shellcheck:
     runs-on: ubuntu-24.04
