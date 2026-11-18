@@ -180,10 +180,12 @@ python3.14 -m venv .venv
 .venv/bin/ruff check bigscreen-bridge tests ../ha-bigscreen-bridge/custom_components
 ```
 
-HA contract tests use Home Assistant 2026.2.3, the version available from the package
-index during this milestone. This does not establish compatibility with the actual
-HA host, whose version is unknown. On Python 3.12/Linux, bridge-only testing can use
-`.[test]` with `pytest --ignore=tests/test_homeassistant.py`.
+HA contract tests use Home Assistant 2026.11.2, which needs Python 3.14.2 or later
+(earlier pins carry security advisories). The `ha-test` extra installs nothing on
+older Pythons. On the TV's Python 3.12, install `.[test]` and run the tests that do
+not import the integration, whose package needs Home Assistant:
+`grep -L custom_components tests/test_*.py | xargs pytest -q`. Passing these tests does not prove
+compatibility with a particular HA host.
 Ignored `upstream/` checkouts are source audit references only. The application
 changes live on the `bigscreen-bridge` branch of each app repository listed in
 [config/repositories.json](config/repositories.json); `patches/` is an export of
