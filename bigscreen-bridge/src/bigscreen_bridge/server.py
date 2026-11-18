@@ -3,6 +3,7 @@ import argparse
 import asyncio
 from collections import OrderedDict
 import contextlib
+import getpass
 import copy
 from datetime import datetime
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from dbus_next import BusType
 from dbus_next.aio import MessageBus
 
 from .audio import AudioManager
+from .lights import COMMANDS as LIGHT_COMMANDS, Lights
 from .mpris import MprisRegistry
 from .power import PowerManager
 from .sessions import SessionController
@@ -63,6 +65,10 @@ async def launch_app(*argv):
 
 FAST_POLL = 2     # seconds between checks of hooks that cannot announce changes
 SLOW_POLL = 10    # seconds between full refreshes, including system state
+LIGHTS_POLL = 5   # seconds between reads of LedFx and HyperHDR
+LIGHT_ARGUMENTS = {"ledfx_pause": {"paused"}, "ledfx_scene": {"scene", "active"},
+                   "ledfx_light": {"virtual", "on", "effect", "brightness", "color"},
+                   "hyperhdr_light": {"instance", "on", "effect", "brightness", "color"}}
 PLAYER_COMMANDS = ("play", "pause", "stop", "seek", "volume_set", "volume_mute")
 
 
@@ -151,6 +157,7 @@ class Bridge:
         self.vacuumtube = None
         self.power = None
         self.audio = None
+        self.lights = None
         self.sessions = None
 
     def hook(self, app_id, enabled=True):
@@ -203,6 +210,8 @@ class Bridge:
             snapshot['power'] = self.power.state
         if self.audio:
             snapshot['audio'] = self.audio.state
+        if self.lights and self.lights.state:
+            snapshot['lights'] = self.lights.state
         if self.sessions:
             snapshot['sessions'] = list(self.sessions.players.values())
             snapshot['paused_by_bridge'] = list(self.sessions.receipts)
@@ -381,6 +390,14 @@ class Bridge:
                 result = await self.audio.execute(command, request.get('volume_level'))
             else:
                 raise BridgeError('unsupported', 'The requested system module is unavailable')
+            await self.notify()
+            return result
+        if command in LIGHT_COMMANDS:
+            if request.keys() - {"id", "command"} - LIGHT_ARGUMENTS[command]:
+                raise BridgeError("invalid_request", "Unexpected command arguments")
+            if not self.lights or not self.lights.enabled:
+                raise BridgeError("unsupported", "LedFx and HyperHDR control is turned off")
+            result = await self.lights.execute(command, {k: v for k, v in request.items() if k not in ("id", "command")})
             await self.notify()
             return result
         if command == "diagnostics":
@@ -591,6 +608,7 @@ async def serve(config_path, diagnostics=None):
         system_bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
         bridge.power = PowerManager(wm.bus, system_bus, config.get('power', {}), changed=changed)
         bridge.audio = AudioManager()
+        bridge.lights = Lights(config, wm.bus, system_bus, user=getpass.getuser())
         mpris = MprisRegistry(wm.bus)
         bridge.sessions = SessionController(bridge, mpris)
         mpris.changed = bridge.sessions.transition
@@ -603,10 +621,11 @@ async def serve(config_path, diagnostics=None):
         for hook in hooks:
             hook.on_change = wake.set
             await hook.subscribe()
-        await asyncio.gather(bridge.power.initialize(), bridge.audio.refresh(), mpris.initialize())
+        await asyncio.gather(bridge.power.initialize(), bridge.audio.refresh(), mpris.initialize(),
+                             bridge.lights.refresh())
 
         async def observe():
-            slow_at = 0
+            slow_at = lights_at = 0
             while True:
                 now = loop.time()
                 slow = now >= slow_at
@@ -619,6 +638,9 @@ async def serve(config_path, diagnostics=None):
                     # Display, logind and PipeWire state need subprocesses; keep them off the fast path.
                     slow_at = now + SLOW_POLL
                     jobs += [bridge.power.refresh(), bridge.audio.refresh()]
+                if now >= lights_at:
+                    lights_at = now + LIGHTS_POLL
+                    jobs.append(bridge.lights.refresh())
                 results = await asyncio.gather(*jobs, return_exceptions=True)
                 for failure in (r for r in results if isinstance(r, Exception)):
                     LOG.warning("State refresh failed: %s (%s)", type(failure).__name__,
@@ -663,6 +685,8 @@ async def serve(config_path, diagnostics=None):
             notification.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await notification
+        if bridge.lights:
+            await bridge.lights.close()
         if system_bus:
             system_bus.disconnect()
         await wm.close()

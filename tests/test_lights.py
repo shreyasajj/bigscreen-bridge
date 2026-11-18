@@ -214,3 +214,44 @@ async def test_disabled_module_reports_nothing():
     assert await module.refresh() is False
     assert module.state == {}
     await module.close()
+
+
+class StubLights:
+    enabled = True
+
+    def __init__(self):
+        self.state = {"ledfx": {"available": True, "paused": False}, "hyperhdr": {"available": False}}
+        self.calls = []
+
+    async def execute(self, command, request):
+        self.calls.append((command, request))
+        return {"ok": command}
+
+
+async def test_bridge_reports_lights_and_routes_their_commands(bridge, recorder):
+    b, http = bridge
+    b.diagnostics = recorder
+    b.lights = StubLights()
+    assert b.snapshot()["lights"] == b.lights.state
+    result = await b.execute({"id": "1", "command": "ledfx_light", "virtual": "tv", "brightness": 0.5})
+    assert result == {"ok": "ledfx_light"}
+    assert b.lights.calls == [("ledfx_light", {"virtual": "tv", "brightness": 0.5})]
+    with pytest.raises(BridgeError) as error:
+        await b.execute({"id": "2", "command": "ledfx_pause", "paused": True, "extra": 1})
+    assert error.value.code == "invalid_request"
+    async with http.ws_connect("/ws", headers={"Authorization": "Bearer " + "a" * 48}) as ws:
+        await ws.receive_json()
+        await ws.send_json({"id": "3" * 8, "command": "hyperhdr_light", "instance": 0, "on": True})
+        while (reply := await ws.receive_json()).get("id") != "3" * 8:
+            pass
+        assert reply["ok"]
+    recorded = recorder.to_dict(b)["commands"][-1]
+    assert recorded["command"] == "hyperhdr_light" and "instance" not in json.dumps(recorded)
+
+
+async def test_without_the_lights_module_the_commands_say_so(bridge):
+    b, _ = bridge
+    assert "lights" not in b.snapshot()
+    with pytest.raises(BridgeError) as error:
+        await b.execute({"id": "1", "command": "ledfx_pause", "paused": True})
+    assert error.value.code == "unsupported"
