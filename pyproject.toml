@@ -11,7 +11,11 @@ dependencies = ["aiohttp>=3.11,<4", "dbus-next==0.2.3"]
 
 [project.optional-dependencies]
 mqtt = ["aiomqtt>=2.3,<3"]
-ha-test = ["homeassistant==2026.2.3", "home-assistant-frontend==20260128.6"]
+# Test-only. Patched Home Assistant releases need Python 3.14.2+; the bridge itself still runs on 3.12.
+ha-test = [
+    "homeassistant==2026.11.2; python_version >= '3.14'",
+    "home-assistant-frontend==20261028.6; python_version >= '3.14'",
+]
 test = ["pytest>=8", "pytest-asyncio>=0.24", "pytest-aiohttp>=1.0", "ruff>=0.9"]
 
 [project.scripts]
