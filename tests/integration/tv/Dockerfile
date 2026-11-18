@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xdg-desktop-portal xdg-desktop-portal-kde python3 python3-venv jq \
  && rm -rf /var/lib/apt/lists/* \
  && systemctl mask getty@tty1.service systemd-networkd-wait-online.service
-RUN useradd -m -u 1000 -s /bin/bash tv \
+RUN userdel -r ubuntu 2>/dev/null; useradd -m -u 1000 -s /bin/bash tv \
  && mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/tv
 COPY session.sh /usr/local/bin/tv-session
 COPY tv-session.service /etc/systemd/user/tv-session.service
