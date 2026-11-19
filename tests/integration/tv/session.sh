@@ -12,12 +12,12 @@ set +u
 set -u
 export QT_QUICK_BACKEND=software LIBGL_ALWAYS_SOFTWARE=1 XDG_SESSION_TYPE=wayland \
        XDG_CURRENT_DESKTOP=KDE KDE_FULL_SESSION=true WAYLAND_DISPLAY=wayland-0
-# The runner has no GPU. KWin's virtual backend needs a render device and crashes when a
-# window is drawn without one, so KWin runs windowed inside Xvfb with software OpenGL.
-Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp &
-for _ in $(seq 50); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.1; done
-DISPLAY=:99 kwin_wayland --x11-display :99 --width 1920 --height 1080 --socket wayland-0 --no-lockscreen \
-    --xwayland > "$XDG_RUNTIME_DIR/kwin.log" 2>&1 &
+# The runner has no GPU. KWin's virtual backend needs a render device (it crashes drawing
+# the first window without one), so the workflow loads the kernel's virtual GPUs (vgem,
+# vkms) and Mesa renders on them in software.
+ls -l /dev/dri 2>&1 || true
+kwin_wayland --virtual --width 1920 --height 1080 --socket wayland-0 --no-lockscreen --xwayland \
+    > "$XDG_RUNTIME_DIR/kwin.log" 2>&1 &
 kwin=$!
 for _ in $(seq 120); do
     busctl --user status org.kde.KWin >/dev/null 2>&1 && [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && break

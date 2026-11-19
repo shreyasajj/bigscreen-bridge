@@ -43,6 +43,7 @@ mkdir -p "$cache"
 docker run -d --name "$name" --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
     --tmpfs /run --tmpfs /run/lock -v "$(pwd)/dist:/opt/release:ro" \
     -v "$cache:/home/tv/.local/share/flatpak" "$image" >/dev/null
+docker exec "$name" sh -c 'chmod a+rw /dev/dri/* 2>/dev/null; ls -l /dev/dri 2>&1' || true
 docker exec "$name" chown tv:tv /home/tv/.local /home/tv/.local/share
 docker exec "$name" chown -R tv:tv /home/tv/.local/share/flatpak
 wait_for 120 "user session bus" 'busctl --user status >/dev/null'

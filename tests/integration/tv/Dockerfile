@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 FROM plasma AS tv
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      xvfb systemd systemd-sysv pipewire pipewire-pulse wireplumber flatpak bubblewrap \
+      systemd systemd-sysv pipewire pipewire-pulse wireplumber flatpak bubblewrap \
       xdg-desktop-portal xdg-desktop-portal-kde python3 python3-venv jq \
  && rm -rf /var/lib/apt/lists/* \
  && systemctl mask getty@tty1.service systemd-networkd-wait-online.service

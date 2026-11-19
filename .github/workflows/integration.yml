@@ -29,6 +29,11 @@ jobs:
           path: ${{ runner.temp }}/flatpak
           key: flatpak-${{ github.run_id }}
           restore-keys: flatpak-
+      - name: Virtual GPU devices for KWin
+        run: |
+          sudo modprobe vgem || sudo apt-get install -y "linux-modules-extra-$(uname -r)" && sudo modprobe vgem || true
+          sudo modprobe vkms || true
+          ls -l /dev/dri || echo "no /dev/dri"
       - name: TV container, bridge and Couchside
         env:
           FLATPAK_CACHE: ${{ runner.temp }}/flatpak
