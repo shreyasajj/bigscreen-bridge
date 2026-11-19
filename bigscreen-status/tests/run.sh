@@ -18,16 +18,28 @@ run() { # test file, stand-in mode: live | no-status | none
     : > "$calls"
     rm -f "$calls.ready"
     expected=$(( $(grep -c 'function test_' "$here/$file") + 2 ))   # plus initTestCase/cleanupTestCase
+    log=$(mktemp)
+    # The stand-in writes nothing to our output (or the capture would wait for it) and is
+    # stopped with the bus; each file gets at most three minutes.
     # shellcheck disable=SC2016 # the inner script gets its values as arguments
-    out=$(dbus-run-session -- sh -c '
+    dbus-run-session -- sh -c '
         here=$1 file=$2 mode=$3 calls=$4 runner=$5
         if [ "$mode" != none ]; then
             flag=; [ "$mode" = no-status ] && flag=--no-status
-            python3 "$here/fake_status.py" --fixture "$here/../fixtures/healthy.json" --calls "$calls" $flag &
-            i=0; until [ -e "$calls.ready" ]; do i=$((i + 1)); [ $i -lt 100 ] || exit 3; sleep 0.1; done
+            python3 "$here/fake_status.py" --fixture "$here/../fixtures/healthy.json" --calls "$calls" $flag \
+                > /tmp/fake_status.log 2>&1 &
+            fake=$!
+            i=0; until [ -e "$calls.ready" ]; do
+                i=$((i + 1)); [ $i -lt 100 ] || { cat /tmp/fake_status.log; exit 3; }; sleep 0.1
+            done
         fi
-        "$runner" -input "$here/$file" 2>&1
-    ' sh "$here" "$file" "$mode" "$calls" "$runner") || true
+        timeout 180 "$runner" -input "$here/$file"
+        code=$?
+        [ -z "${fake:-}" ] || kill "$fake" 2>/dev/null
+        exit $code
+    ' sh "$here" "$file" "$mode" "$calls" "$runner" > "$log" 2>&1 || true
+    out=$(cat "$log")
+    rm -f "$log"
     echo "$out" | grep -E '^(PASS|FAIL|SKIP|XFAIL|QWARN|Totals)|^   ' || true
     passed=$(echo "$out" | sed -n 's/^Totals: \([0-9]*\) passed, \([0-9]*\) failed.*/\1 \2/p' | tail -n 1)
     if [ "${passed% *}" = "$expected" ] && [ "${passed#* }" = 0 ]; then
