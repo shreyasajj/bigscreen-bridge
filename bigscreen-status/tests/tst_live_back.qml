@@ -8,7 +8,7 @@ KeysCase {
     function test_back_closes_the_screen() {
         openScreen()
         tryCompare(win, "link", "live", 5000)
-        const spy = createTemporaryObject(spyComponent, root, {target: win})
+        const spy = createTemporaryObject(spyComponent, win.contentItem, {target: win})
         verify(!card().expanded)
         press(Qt.Key_Escape)
         compare(spy.count, 1)

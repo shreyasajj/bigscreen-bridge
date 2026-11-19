@@ -117,6 +117,7 @@ QQC2.ApplicationWindow {
     }
 
     Loader {
+        objectName: "liveSource"
         active: window.live
         source: "components/LiveSource.qml"
         onLoaded: {

@@ -48,7 +48,7 @@ KeysCase {
     }
 
     function test_back_folds_open_sources_first() {
-        const spy = createTemporaryObject(spyComponent, root, {target: win})
+        const spy = createTemporaryObject(spyComponent, win.contentItem, {target: win})
         press(Qt.Key_Return)
         verify(card().expanded)
         press(Qt.Key_Escape)
@@ -57,15 +57,20 @@ KeysCase {
     }
 
     function test_behind_another_app_it_stops_reading_and_reads_on_return() {
+        // The offscreen platform cannot put the application behind another one, so this
+        // checks the two halves: the pause follows the window's foreground state, and a
+        // paused source stops reading and reads once on return.
+        const source = findChild(win, "liveSource").item
+        verify(source)
+        compare(source.paused, !win.foreground)
+        verify(!source.paused)
         tryVerify(() => calls("Status") > 0)
-        win.hide()
-        tryVerify(() => !win.foreground, 3000)
+        source.paused = true
+        wait(400)    // let a read already in flight finish
         const paused = calls("Status")
         wait(1500)   // the stand-in signals StatusChanged every 300 ms
         compare(calls("Status"), paused, "read while in the background")
-        win.show()
-        win.requestActivate()
-        tryVerify(() => win.foreground, 3000)
+        source.paused = false
         tryVerify(() => calls("Status") > paused, 2000, "no fresh read on return")
     }
 
