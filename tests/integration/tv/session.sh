@@ -16,7 +16,9 @@ export QT_QUICK_BACKEND=software LIBGL_ALWAYS_SOFTWARE=1 XDG_SESSION_TYPE=waylan
 # the first window without one), so the workflow loads the kernel's virtual GPUs (vgem,
 # vkms) and Mesa renders on them in software.
 ls -l /dev/dri 2>&1 || true
-kwin_wayland --virtual --width 1920 --height 1080 --socket wayland-0 --no-lockscreen --xwayland \
+# Mesa has no driver for vgem's render node; its software KMS driver renders into dumb
+# buffers there instead.
+MESA_LOADER_DRIVER_OVERRIDE=kms_swrast QT_FORCE_STDERR_LOGGING=1 kwin_wayland --virtual --width 1920 --height 1080 --socket wayland-0 --no-lockscreen --xwayland \
     > "$XDG_RUNTIME_DIR/kwin.log" 2>&1 &
 kwin=$!
 for _ in $(seq 120); do

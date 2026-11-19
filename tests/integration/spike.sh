@@ -24,7 +24,7 @@ dump() {
     docker exec "$name" systemctl --no-pager --failed || true
     docker exec "$name" journalctl --no-pager -n 60 || true
     as_tv 'systemctl --user --no-pager status tv-session bigscreen-bridge couchside' || true
-    as_tv 'echo "-- kwin"; tail -n 80 /run/user/1000/kwin.log' || true
+    as_tv 'echo "-- kwin"; grep -v "Enabled layers\|src KWin::RectF\|layer configuration" /run/user/1000/kwin.log | head -n 80' || true
     as_tv 'journalctl --user --no-pager -n 40 -u bigscreen-bridge; journalctl --user --no-pager -n 60 -u couchside' || true
 }
 cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; }
