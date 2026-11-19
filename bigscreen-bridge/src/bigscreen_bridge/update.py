@@ -8,13 +8,14 @@ install restarts the bridge it waits for `/health`; if that never comes it point
 `venv` back at the previous version and restarts again. Stdlib only, apart from
 dbus-next, which the bridge already depends on. The token is never read or logged.
 """
+
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import importlib.metadata
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -23,11 +24,12 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 REPO = "shreyasajj/bigscreen-bridge"
 RELEASES = f"https://api.github.com/repos/{REPO}/releases?per_page=30"
 WAIT_SECONDS = 600
-MAX_WAITS = 24                      # 24 x 10 minutes = 4 hours
+MAX_WAITS = 24  # 24 x 10 minutes = 4 hours
 HEALTH_SECONDS = 60
 ROOT = Path.home() / ".local/share/bigscreen-bridge"
 VERSION = re.compile(r"v?(\d+)\.(\d+)\.(\d+)(?:rc(\d+))?")
@@ -52,8 +54,12 @@ def pick_release(releases, channel, installed):
     best = None
     for release in releases:
         version = parse_version(release.get("tag_name"))
-        if (version is None or release.get("draft")
-                or (release.get("prerelease") and channel != "prerelease") or version <= current):
+        if (
+            version is None
+            or release.get("draft")
+            or (release.get("prerelease") and channel != "prerelease")
+            or version <= current
+        ):
             continue
         if best is None or version > best[0]:
             best = (version, release)
@@ -62,8 +68,14 @@ def pick_release(releases, channel, installed):
 
 def verify_and_extract(archive, sums, name, dest):
     """Check `archive` against its `SHA256SUMS` line, then unpack it (without its top directory) to `dest`."""
-    wanted = next((line.split()[0] for line in sums.splitlines()
-                   if len(line.split()) == 2 and line.split()[1].lstrip("*") == name), None)
+    wanted = next(
+        (
+            line.split()[0]
+            for line in sums.splitlines()
+            if len(line.split()) == 2 and line.split()[1].lstrip("*") == name
+        ),
+        None,
+    )
     actual = hashlib.sha256(Path(archive).read_bytes()).hexdigest()
     if wanted is None or wanted.lower() != actual:
         raise UpdateError(f"Checksum mismatch for {name}")
@@ -74,8 +86,12 @@ def verify_and_extract(archive, sums, name, dest):
         with tarfile.open(archive) as tar:
             for member in tar.getmembers():
                 parts = Path(member.name).parts
-                if (member.name.startswith("/") or ".." in parts
-                        or not (member.isfile() or member.isdir()) or len(parts) < 1):
+                if (
+                    member.name.startswith("/")
+                    or ".." in parts
+                    or not (member.isfile() or member.isdir())
+                    or len(parts) < 1
+                ):
                     raise UpdateError(f"Refusing unsafe archive member in {name}")
                 member.name = str(Path(*parts[1:])) if len(parts) > 1 else "."
             tar.extractall(staging, filter="data")
@@ -94,8 +110,10 @@ def verify_and_extract(archive, sums, name, dest):
 
 def is_playing(status):
     snapshot = status.get("snapshot") or {}
-    return any(entry.get("state") == "playing"
-               for entry in (snapshot.get("apps") or []) + (snapshot.get("sessions") or []))
+    return any(
+        entry.get("state") == "playing"
+        for entry in (snapshot.get("apps") or []) + (snapshot.get("sessions") or [])
+    )
 
 
 def _settings(config_path):
@@ -103,8 +121,10 @@ def _settings(config_path):
         update = json.loads(Path(config_path).read_text()).get("update") or {}
     except (OSError, ValueError):
         update = {}
-    return {"channel": "prerelease" if update.get("channel") == "prerelease" else "stable",
-            "auto": update.get("auto", True) is not False}
+    return {
+        "channel": "prerelease" if update.get("channel") == "prerelease" else "stable",
+        "auto": update.get("auto", True) is not False,
+    }
 
 
 def _relink(root, target):
@@ -116,8 +136,21 @@ def _relink(root, target):
     os.replace(temporary, link)
 
 
-def run(config_path, *, installed, root, fetch, read_status, install, health, restart, sleep, log,
-        check=False, now=False):
+def run(
+    config_path,
+    *,
+    installed,
+    root,
+    fetch,
+    read_status,
+    install,
+    health,
+    restart,
+    sleep,
+    log,
+    check=False,
+    now=False,
+):
     settings = _settings(config_path)
     try:
         release = pick_release(fetch(), settings["channel"], installed)
@@ -144,12 +177,13 @@ def run(config_path, *, installed, root, fetch, read_status, install, health, re
         for attempt in range(MAX_WAITS + 1):
             try:
                 playing = is_playing(read_status())
-            except Exception:        # no bridge on the bus: nothing to interrupt
+            except Exception:  # no bridge on the bus: nothing to interrupt
                 playing = False
             if not playing:
                 break
             if attempt == MAX_WAITS:
-                log(f"Update {version} postponed: still playing after {MAX_WAITS * WAIT_SECONDS // 3600} hours")
+                hours = MAX_WAITS * WAIT_SECONDS // 3600
+                log(f"Update {version} postponed: still playing after {hours} hours")
                 return 0
             sleep(WAIT_SECONDS)
     link = Path(root) / "venv"
@@ -163,12 +197,10 @@ def run(config_path, *, installed, root, fetch, read_status, install, health, re
         problem = "the bridge did not become healthy"
     except UpdateError as exc:
         problem = str(exc)
-    except Exception as exc:     # anything else after the install has begun must still roll back
+    except Exception as exc:  # anything else after the install has begun must still roll back
         problem = f"unexpected {type(exc).__name__}"
-    try:
+    with contextlib.suppress(OSError):
         state.write_text(json.dumps({"failed": version}))
-    except OSError:
-        pass
     if previous and (not link.is_symlink() or os.readlink(link) != previous):
         _relink(root, previous)
         restart()
@@ -179,6 +211,7 @@ def run(config_path, *, installed, root, fetch, read_status, install, health, re
 
 
 # -- the real side effects ---------------------------------------------------------
+
 
 def _get(url, accept="application/vnd.github+json"):
     request = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "bigscreen-bridge-update"})
@@ -213,6 +246,7 @@ def read_status():
             return json.loads(await proxy.get_interface("org.bigscreen.Bridge.Status").call_status())
         finally:
             bus.disconnect()
+
     return asyncio.run(asyncio.wait_for(call(), 10))
 
 
@@ -231,6 +265,7 @@ def make_install(root):
         result = subprocess.run(["sh", "scripts/install-tv.sh"], cwd=source, check=False)
         if result.returncode:
             raise UpdateError(f"install-tv.sh exited with {result.returncode}")
+
     return install
 
 
@@ -255,10 +290,11 @@ def make_health(config_path):
                     body = json.loads(response.read())
                     if isinstance(body, dict) and body.get("ok"):
                         return True
-            except Exception:        # not up yet, or an odd reply: keep waiting until the deadline
+            except Exception:  # not up yet, or an odd reply: keep waiting until the deadline
                 pass
             time.sleep(2)
         return False
+
     return health
 
 
@@ -276,9 +312,20 @@ def main(argv=None):
         installed = importlib.metadata.version("bigscreen-bridge")
     except importlib.metadata.PackageNotFoundError:
         installed = "unknown"
-    return run(args.config, installed=installed, root=ROOT, fetch=fetch_releases, read_status=read_status,
-               install=make_install(ROOT), health=make_health(args.config), restart=restart,
-               sleep=time.sleep, log=lambda line: print(line, flush=True), check=args.check, now=args.now)
+    return run(
+        args.config,
+        installed=installed,
+        root=ROOT,
+        fetch=fetch_releases,
+        read_status=read_status,
+        install=make_install(ROOT),
+        health=make_health(args.config),
+        restart=restart,
+        sleep=time.sleep,
+        log=lambda line: print(line, flush=True),
+        check=args.check,
+        now=args.now,
+    )
 
 
 if __name__ == "__main__":

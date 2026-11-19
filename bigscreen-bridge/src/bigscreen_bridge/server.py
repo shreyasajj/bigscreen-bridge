@@ -1,50 +1,56 @@
 """Authenticated local bridge for KDE app lifecycle and verified media controls."""
+
 import argparse
 import asyncio
-from collections import OrderedDict
 import contextlib
-import getpass
 import copy
-from datetime import datetime
-from dataclasses import dataclass
+import getpass
 import hmac
 import json
 import logging
-from pathlib import Path
-import socket
 import signal
+import socket
+from collections import OrderedDict
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 
 from aiohttp import web
 from dbus_next import BusType
 from dbus_next.aio import MessageBus
 
+from .adapters import APPS, BridgeError
 from .audio import AudioManager
-from .lights import COMMANDS as LIGHT_COMMANDS, Lights
-from .mpris import MprisRegistry
-from .power import PowerManager
-from .sessions import SessionController
-
 from .config import load_config
+from .couchside import KINDS, CouchsideHook, validate_content
+from .deep_links import parse_uri
 from .diagnostics import Recorder, close_reason
 from .discovery import advertise
-from .pairing import Pairing
-from .mqtt import MqttLink, settings as mqtt_settings
-from .deep_links import parse_uri
-from .adapters import APPS, BridgeError
-from .kwin import KWin
-from .status import PATH as STATUS_PATH, PairingInterface, StatusInterface, StatusSignal
-from .couchside import CouchsideHook, KINDS, validate_content
-from .vacuumtube import VacuumTubeHook, validate_content as validate_youtube, validate_volume
 from .flimmer import FlimmerHook, validate_channel
 from .hooks import validate_page
-from .stremio import StremioHook, validate_content as validate_stremio, validate_seek
+from .kwin import KWin
+from .lights import COMMANDS as LIGHT_COMMANDS
+from .lights import Lights
+from .mpris import MprisRegistry
+from .mqtt import MqttLink
+from .mqtt import settings as mqtt_settings
+from .pairing import Pairing
+from .power import PowerManager
+from .sessions import SessionController
+from .status import PATH as STATUS_PATH
+from .status import PairingInterface, StatusInterface, StatusSignal
+from .stremio import StremioHook, validate_seek
+from .stremio import validate_content as validate_stremio
+from .vacuumtube import VacuumTubeHook, validate_volume
+from .vacuumtube import validate_content as validate_youtube
 
 LOG = logging.getLogger(__name__)
 
 
 async def process(*argv):
-    proc = await asyncio.create_subprocess_exec(*argv, stdout=asyncio.subprocess.PIPE,
-                                               stderr=asyncio.subprocess.DEVNULL)
+    proc = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+    )
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), 15)
     except TimeoutError:
@@ -57,18 +63,22 @@ async def process(*argv):
 
 
 async def launch_app(*argv):
-    proc = await asyncio.create_subprocess_exec(*argv, stdout=asyncio.subprocess.DEVNULL,
-                                               stderr=asyncio.subprocess.DEVNULL)
+    proc = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+    )
     if await proc.wait():
         raise BridgeError("launch_failed", "Application exited unsuccessfully")
 
 
-FAST_POLL = 2     # seconds between checks of hooks that cannot announce changes
-SLOW_POLL = 10    # seconds between full refreshes, including system state
-LIGHTS_POLL = 5   # seconds between reads of LedFx and HyperHDR
-LIGHT_ARGUMENTS = {"ledfx_pause": {"paused"}, "ledfx_scene": {"scene", "active"},
-                   "ledfx_light": {"virtual", "on", "effect", "brightness", "color"},
-                   "hyperhdr_light": {"instance", "on", "effect", "brightness", "color"}}
+FAST_POLL = 2  # seconds between checks of hooks that cannot announce changes
+SLOW_POLL = 10  # seconds between full refreshes, including system state
+LIGHTS_POLL = 5  # seconds between reads of LedFx and HyperHDR
+LIGHT_ARGUMENTS = {
+    "ledfx_pause": {"paused"},
+    "ledfx_scene": {"scene", "active"},
+    "ledfx_light": {"virtual", "on", "effect", "brightness", "color"},
+    "hyperhdr_light": {"instance", "on", "effect", "brightness", "color"},
+}
 PLAYER_COMMANDS = ("play", "pause", "stop", "seek", "volume_set", "volume_mute")
 
 
@@ -98,9 +108,9 @@ def _steady(media):
     if media.get("state") == "playing" and isinstance(position, (int, float)):
         try:
             started = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp() - position
-            media["position"] = round(started / 3)   # the implied start; moves only on seek or stall
+            media["position"] = round(started / 3)  # the implied start; moves only on seek or stall
         except (AttributeError, ValueError, OverflowError):
-            del media["position"]                    # no anchor to compare against
+            del media["position"]  # no anchor to compare against
     return media
 
 
@@ -116,25 +126,37 @@ def significant(snapshot):
 @dataclass(frozen=True)
 class Adapter:
     """What the bridge needs to know about one application hook; the rest is shared."""
+
     app: str
-    prefix: str                     # Home Assistant media content type prefix
-    kinds: tuple                    # content types assumed until the app reports its own
-    parse_open: callable            # validated request -> arguments for `deliver`
-    deliver: str = "open"           # hook coroutine that performs the navigation
-    commands: tuple = ()            # player commands the app may negotiate
+    prefix: str  # Home Assistant media content type prefix
+    kinds: tuple  # content types assumed until the app reports its own
+    parse_open: callable  # validated request -> arguments for `deliver`
+    deliver: str = "open"  # hook coroutine that performs the navigation
+    commands: tuple = ()  # player commands the app may negotiate
     resume: bool = False
-    owner: str | None = None        # an external playback owner; never add transport controls
+    owner: str | None = None  # an external playback owner; never add transport controls
 
     def content_types(self, hook):
-        return [self.prefix + kind for kind in getattr(hook, "content_types", self.kinds)] if hook.enabled else []
+        return (
+            [self.prefix + kind for kind in getattr(hook, "content_types", self.kinds)]
+            if hook.enabled
+            else []
+        )
 
 
-ADAPTERS = {adapter.app: adapter for adapter in (
-    Adapter("couchside", "couchside_", KINDS, _open_couchside, deliver="navigate", owner="music_assistant"),
-    Adapter("stremio", "stremio_", (), _open_stremio, commands=("play", "pause", "stop", "seek"), resume=True),
-    Adapter("flimmer", "flimmer_", ("channel",), _open_flimmer, commands=("play", "pause", "stop")),
-    Adapter("vacuumtube", "youtube_", (), _open_youtube, commands=PLAYER_COMMANDS),
-)}
+ADAPTERS = {
+    adapter.app: adapter
+    for adapter in (
+        Adapter(
+            "couchside", "couchside_", KINDS, _open_couchside, deliver="navigate", owner="music_assistant"
+        ),
+        Adapter(
+            "stremio", "stremio_", (), _open_stremio, commands=("play", "pause", "stop", "seek"), resume=True
+        ),
+        Adapter("flimmer", "flimmer_", ("channel",), _open_flimmer, commands=("play", "pause", "stop")),
+        Adapter("vacuumtube", "youtube_", (), _open_youtube, commands=PLAYER_COMMANDS),
+    )
+}
 
 
 class Bridge:
@@ -147,8 +169,8 @@ class Bridge:
         self.diagnostics.protect(config.get("token"))
         self.installed = set()
         self.clients = set()
-        self.close_reasons = {}         # client -> why the bridge itself dropped it
-        self.publishers = []            # extra transports told about every state change
+        self.close_reasons = {}  # client -> why the bridge itself dropped it
+        self.publishers = []  # extra transports told about every state change
         self.lock = asyncio.Lock()
         self.launch_tasks = {}
         self.couchside = None
@@ -187,40 +209,59 @@ class Bridge:
         negotiated = state.get("capabilities", [])
         # Volume belongs to the app; transport only exists while something is loaded.
         loaded = app["state"] in ("playing", "paused", "buffering")
-        app["capabilities"] += [c for c in adapter.commands if c in negotiated
-                                and (loaded or c.startswith("volume_"))
-                                and (c != "seek" or media.get("duration", 0) > 0)]
+        app["capabilities"] += [
+            c
+            for c in adapter.commands
+            if c in negotiated
+            and (loaded or c.startswith("volume_"))
+            and (c != "seek" or media.get("duration", 0) > 0)
+        ]
 
     def snapshot(self):
-        active = next((app.id for app in APPS for w in self.wm.windows
-                       if w.get("active") and app.matches(w)), None)
-        snapshot = {"type": "state", "protocol": 1, "device_id": self.config["device_id"],
-                "name": self.config.get("name", socket.gethostname()), "active_app": active,
-                "available": self.wm.ready.is_set(),
-                "apps": [{"id": a.id, "name": a.name, "installed": a.flatpak in self.installed,
-                          "running": any(a.matches(w) for w in self.wm.windows),
-                          "capabilities": ["focus"] if a.flatpak in self.installed else [],
-                          "state": "idle" if any(a.matches(w) for w in self.wm.windows) else "off"}
-                         for a in APPS]}
+        active = next(
+            (app.id for app in APPS for w in self.wm.windows if w.get("active") and app.matches(w)), None
+        )
+        snapshot = {
+            "type": "state",
+            "protocol": 1,
+            "device_id": self.config["device_id"],
+            "name": self.config.get("name", socket.gethostname()),
+            "active_app": active,
+            "available": self.wm.ready.is_set(),
+            "apps": [
+                {
+                    "id": a.id,
+                    "name": a.name,
+                    "installed": a.flatpak in self.installed,
+                    "running": any(a.matches(w) for w in self.wm.windows),
+                    "capabilities": ["focus"] if a.flatpak in self.installed else [],
+                    "state": "idle" if any(a.matches(w) for w in self.wm.windows) else "off",
+                }
+                for a in APPS
+            ],
+        }
         for app in snapshot["apps"]:
             hook = self.hook(app["id"], enabled=False)
             if hook:
                 self._describe(app, ADAPTERS[app["id"]], hook)
         if self.power:
-            snapshot['power'] = self.power.state
+            snapshot["power"] = self.power.state
         if self.audio:
-            snapshot['audio'] = self.audio.state
+            snapshot["audio"] = self.audio.state
         if self.lights and self.lights.state:
-            snapshot['lights'] = self.lights.state
+            snapshot["lights"] = self.lights.state
         if self.sessions:
-            snapshot['sessions'] = list(self.sessions.players.values())
-            snapshot['paused_by_bridge'] = list(self.sessions.receipts)
+            snapshot["sessions"] = list(self.sessions.players.values())
+            snapshot["paused_by_bridge"] = list(self.sessions.receipts)
         return copy.deepcopy(snapshot)
 
     def status(self):
         """The token-free local read: what clients are sent, plus the bridge's own diagnostics."""
-        return {"snapshot": self.snapshot(), "diagnostics": self.diagnostics.to_dict(self),
-                "pairing": self.pairing.public() if self.pairing else None}
+        return {
+            "snapshot": self.snapshot(),
+            "diagnostics": self.diagnostics.to_dict(self),
+            "pairing": self.pairing.public() if self.pairing else None,
+        }
 
     def authorized(self, header):
         expected = "Bearer " + self.config["token"]
@@ -244,7 +285,9 @@ class Bridge:
                 await client.send_json(data)
         except (ConnectionError, RuntimeError, TimeoutError) as exc:
             if client in self.clients:
-                self.close_reasons[client] = "send_timeout" if isinstance(exc, TimeoutError) else "connection_lost"
+                self.close_reasons[client] = (
+                    "send_timeout" if isinstance(exc, TimeoutError) else "connection_lost"
+                )
             self.clients.discard(client)
             await client.close()
 
@@ -275,8 +318,13 @@ class Bridge:
             if task is None or task.done() or need_control:
                 running = (await process("flatpak", "ps", "--columns=application")).splitlines()
                 if app.flatpak in running and not hook:
-                    raise BridgeError("readiness_timeout", "App is running without a controllable window; no duplicate launched")
-                LOG.info("Launching %s; missing window=%s, missing control=%s", app.id, not windows, need_control)
+                    raise BridgeError(
+                        "readiness_timeout",
+                        "App is running without a controllable window; no duplicate launched",
+                    )
+                LOG.info(
+                    "Launching %s; missing window=%s, missing control=%s", app.id, not windows, need_control
+                )
                 task = asyncio.create_task(self.launcher("flatpak", "run", app.flatpak))
                 self.launch_tasks[app.id] = task
                 # Retrieve errors even when the application exits after readiness.
@@ -297,8 +345,10 @@ class Bridge:
             except TimeoutError as exc:
                 if need_control and any(app.matches(w) for w in self.wm.windows):
                     # The app is up, but this build (or this start) never offered its control endpoint.
-                    raise BridgeError("readiness_timeout",
-                                      "Application window appeared but its control endpoint did not answer") from exc
+                    raise BridgeError(
+                        "readiness_timeout",
+                        "Application window appeared but its control endpoint did not answer",
+                    ) from exc
                 raise BridgeError("readiness_timeout", "Application did not acquire a window") from exc
         window = next((w for w in windows if w.get("active")), windows[0])
         await self.wm.focus(window["id"])
@@ -329,8 +379,11 @@ class Bridge:
                 raise
             if adapter.app == "couchside":
                 # The kind and request only: Music Assistant URIs and search text stay out of the journal.
-                LOG.info("Couchside acknowledged navigation to %s (request %s)",
-                         request["content_type"], request["id"][:8])
+                LOG.info(
+                    "Couchside acknowledged navigation to %s (request %s)",
+                    request["content_type"],
+                    request["id"][:8],
+                )
             # UI navigation cannot bypass Wayland's focus policy; KWin confirms it.
             await self._focus(app)
             await self.notify()
@@ -370,26 +423,33 @@ class Bridge:
 
     async def execute(self, request):
         command = request.get("command")
-        global_media = ('pause_active', 'pause_all', 'resume_active', 'resume_previously_paused', 'stop_active', 'stop_all')
-        local_power = ('screen_off', 'screen_on', 'lock_screen', 'get_power_state')
-        system_audio = ('mute', 'unmute', 'set_volume')
+        global_media = (
+            "pause_active",
+            "pause_all",
+            "resume_active",
+            "resume_previously_paused",
+            "stop_active",
+            "stop_all",
+        )
+        local_power = ("screen_off", "screen_on", "lock_screen", "get_power_state")
+        system_audio = ("mute", "unmute", "set_volume")
         if command in global_media + local_power + system_audio:
-            allowed = {'id', 'command', 'volume_level'} if command == 'set_volume' else {'id', 'command'}
+            allowed = {"id", "command", "volume_level"} if command == "set_volume" else {"id", "command"}
             if request.keys() - allowed:
-                raise BridgeError('invalid_request', 'Unexpected command arguments')
+                raise BridgeError("invalid_request", "Unexpected command arguments")
             if command in global_media and self.sessions:
                 result = await self.sessions.execute(command)
             elif command in local_power and self.power:
-                if command == 'get_power_state':
+                if command == "get_power_state":
                     result = await self.power.refresh()
-                elif command == 'lock_screen':
+                elif command == "lock_screen":
                     result = await self.power.lock()
                 else:
-                    result = await self.power.display(command == 'screen_on')
+                    result = await self.power.display(command == "screen_on")
             elif command in system_audio and self.audio:
-                result = await self.audio.execute(command, request.get('volume_level'))
+                result = await self.audio.execute(command, request.get("volume_level"))
             else:
-                raise BridgeError('unsupported', 'The requested system module is unavailable')
+                raise BridgeError("unsupported", "The requested system module is unavailable")
             await self.notify()
             return result
         if command in LIGHT_COMMANDS:
@@ -397,14 +457,28 @@ class Bridge:
                 raise BridgeError("invalid_request", "Unexpected command arguments")
             if not self.lights or not self.lights.enabled:
                 raise BridgeError("unsupported", "LedFx and HyperHDR control is turned off")
-            result = await self.lights.execute(command, {k: v for k, v in request.items() if k not in ("id", "command")})
+            result = await self.lights.execute(
+                command, {k: v for k, v in request.items() if k not in ("id", "command")}
+            )
             await self.notify()
             return result
         if command == "diagnostics":
             if request.keys() - {"id", "command"}:
                 raise BridgeError("invalid_request", "Unexpected command arguments")
             return self.diagnostics.to_dict(self)
-        if command not in ("get_state", "browse", "focus", "open", "open_uri", "play", "pause", "stop", "seek", "volume_set", "volume_mute"):
+        if command not in (
+            "get_state",
+            "browse",
+            "focus",
+            "open",
+            "open_uri",
+            "play",
+            "pause",
+            "stop",
+            "seek",
+            "volume_set",
+            "volume_mute",
+        ):
             raise BridgeError("unsupported", "Command is not supported")
         allowed = {"id", "command", "app"} if command == "focus" else {"id", "command"}
         if command == "open_uri":
@@ -444,14 +518,19 @@ class Bridge:
                 else:
                     result = await hook.browse(path, offset, limit)
                     kinds = [item["content_type"] for item in result["items"]]
-                for item, kind in zip(result["items"], kinds):
+                for item, kind in zip(result["items"], kinds, strict=True):
                     # The typed ID a client passes straight back to `open`.
                     item["media_content_type"] = adapter.prefix + kind if kind else None
                 return result
             if "offset" in request or "limit" in request or "path" in request:
                 raise BridgeError("invalid_request", "Pagination requires an application catalogue")
-            return {"items": [{"id": a.id, "title": a.name, "media_content_type": "app"}
-                              for a in APPS if a.flatpak in self.installed]}
+            return {
+                "items": [
+                    {"id": a.id, "title": a.name, "media_content_type": "app"}
+                    for a in APPS
+                    if a.flatpak in self.installed
+                ]
+            }
         return self.snapshot()
 
     async def handle(self, payload, cache, transport="websocket"):
@@ -471,20 +550,27 @@ class Bridge:
                 request_id = None
                 raise BridgeError("invalid_request", "A request ID is required")
             if request_id in cache and data == cache[request_id][0]:
-                return cache[request_id][1]   # a retry: answered and recorded once already
+                return cache[request_id][1]  # a retry: answered and recorded once already
             entry = self.diagnostics.command_started(request_id, data, transport)
             if request_id in cache:
                 raise BridgeError("invalid_request", "Request ID reused with different data")
             result = await self.execute(data)
             response = {"type": "result", "id": request_id, "ok": True, "result": result}
         except (json.JSONDecodeError, BridgeError) as exc:
-            response = {"type": "result", "id": request_id, "ok": False,
-                        "error": {"code": getattr(exc, "code", "invalid_request"),
-                                  "message": str(exc)}}
+            response = {
+                "type": "result",
+                "id": request_id,
+                "ok": False,
+                "error": {"code": getattr(exc, "code", "invalid_request"), "message": str(exc)},
+            }
         except Exception:
             LOG.exception("Request failed")
-            response = {"type": "result", "id": request_id, "ok": False,
-                        "error": {"code": "internal_error", "message": "Bridge operation failed"}}
+            response = {
+                "type": "result",
+                "id": request_id,
+                "ok": False,
+                "error": {"code": "internal_error", "message": "Bridge operation failed"},
+            }
         if entry is None:
             entry = self.diagnostics.command_started(request_id, data, transport)
         self.diagnostics.command_finished(entry, response, id(cache))
@@ -500,11 +586,18 @@ class Bridge:
     def _log_failure(entry, response):
         """One journal line per failed request, from the recorder's sanitized names only."""
         entry = entry or {}
-        code = (entry.get("error_code") or "error")
+        code = entry.get("error_code") or "error"
         # A client's own mistake is routine; anything else means the TV could not do what was asked.
         level = logging.INFO if code in ("invalid_request", "unsupported") else logging.WARNING
-        LOG.log(level, "Request %s failed: %s %s via %s (%s)", (entry.get("id") or "-")[:8],
-                entry.get("command") or "-", entry.get("app") or "system", entry.get("transport") or "-", code)
+        LOG.log(
+            level,
+            "Request %s failed: %s %s via %s (%s)",
+            (entry.get("id") or "-")[:8],
+            entry.get("command") or "-",
+            entry.get("app") or "system",
+            entry.get("transport") or "-",
+            code,
+        )
 
     async def pair(self, request):
         """Swap the code shown on the TV for this client's own token. No browser origins."""
@@ -522,10 +615,18 @@ class Bridge:
                 raise BridgeError("invalid_request", "Expected code and name only")
             token = self.pairing.redeem(body.get("code"), body.get("name"))
         except BridgeError as exc:
-            return web.json_response({"ok": False, "error": {"code": exc.code, "message": str(exc)}},
-                                     status=status.get(exc.code, 404))
-        return web.json_response({"ok": True, "token": token, "device_id": self.config["device_id"],
-                                  "name": self.config.get("name", socket.gethostname())})
+            return web.json_response(
+                {"ok": False, "error": {"code": exc.code, "message": str(exc)}},
+                status=status.get(exc.code, 404),
+            )
+        return web.json_response(
+            {
+                "ok": True,
+                "token": token,
+                "device_id": self.config["device_id"],
+                "name": self.config.get("name", socket.gethostname()),
+            }
+        )
 
     async def websocket(self, request):
         if request.headers.get("Origin") or not self.authorized(request.headers.get("Authorization", "")):
@@ -588,7 +689,9 @@ async def serve(config_path, diagnostics=None):
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stopping.set)
     try:
-        bridge.installed = set((await process("flatpak", "list", "--app", "--columns=application")).splitlines())
+        bridge.installed = set(
+            (await process("flatpak", "list", "--app", "--columns=application")).splitlines()
+        )
         await wm.start()
         bridge.diagnostics.started(config.get("port", 8765))
         # A second, read-only interface on the name the KWin receiver already owns.
@@ -596,7 +699,7 @@ async def serve(config_path, diagnostics=None):
         wm.bus.export(STATUS_PATH, status)
         wm.bus.export(STATUS_PATH, PairingInterface(bridge.pairing.start))
         bridge.diagnostics.listeners.append(StatusSignal(status.StatusChanged))
-        bridge.pairing.refresh()   # keep a code on screen while nothing has paired
+        bridge.pairing.refresh()  # keep a code on screen while nothing has paired
         bridge.couchside = CouchsideHook(wm.bus, config.get("couchside_control", False))
         bridge.stremio = StremioHook(wm.bus, config.get("stremio_control", False))
         bridge.flimmer = FlimmerHook(wm.bus, config.get("flimmer_control", False))
@@ -606,7 +709,7 @@ async def serve(config_path, diagnostics=None):
             hook.recorder = bridge.diagnostics
 
         system_bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
-        bridge.power = PowerManager(wm.bus, system_bus, config.get('power', {}), changed=changed)
+        bridge.power = PowerManager(wm.bus, system_bus, config.get("power", {}), changed=changed)
         bridge.audio = AudioManager()
         bridge.lights = Lights(config, wm.bus, system_bus, user=getpass.getuser())
         mpris = MprisRegistry(wm.bus)
@@ -621,8 +724,9 @@ async def serve(config_path, diagnostics=None):
         for hook in hooks:
             hook.on_change = wake.set
             await hook.subscribe()
-        await asyncio.gather(bridge.power.initialize(), bridge.audio.refresh(), mpris.initialize(),
-                             bridge.lights.refresh())
+        await asyncio.gather(
+            bridge.power.initialize(), bridge.audio.refresh(), mpris.initialize(), bridge.lights.refresh()
+        )
 
         async def observe():
             slow_at = lights_at = 0
@@ -643,8 +747,11 @@ async def serve(config_path, diagnostics=None):
                     jobs.append(bridge.lights.refresh())
                 results = await asyncio.gather(*jobs, return_exceptions=True)
                 for failure in (r for r in results if isinstance(r, Exception)):
-                    LOG.warning("State refresh failed: %s (%s)", type(failure).__name__,
-                                getattr(failure, "code", "unexpected"))
+                    LOG.warning(
+                        "State refresh failed: %s (%s)",
+                        type(failure).__name__,
+                        getattr(failure, "code", "unexpected"),
+                    )
                 if previous != significant(bridge.snapshot()):
                     await bridge.notify()
                 with contextlib.suppress(TimeoutError):

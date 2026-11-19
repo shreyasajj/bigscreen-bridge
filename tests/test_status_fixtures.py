@@ -1,4 +1,5 @@
 """The status screen's fixtures must have exactly the shape the real bridge produces."""
+
 import asyncio
 import json
 import logging
@@ -6,7 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from bigscreen_bridge.adapters import BridgeError
 from bigscreen_bridge.couchside import CouchsideHook
 from bigscreen_bridge.diagnostics import Recorder
@@ -24,18 +24,28 @@ def reference():
     wm = SimpleNamespace(windows=[], ready=asyncio.Event())
     recorder = Recorder()
     bridge = Bridge({"device_id": "d", "name": "TV"}, wm, diagnostics=recorder)
-    bridge.couchside, bridge.stremio, bridge.flimmer = (cls(None, True) for cls in
-                                                        (CouchsideHook, StremioHook, FlimmerHook))
+    bridge.couchside, bridge.stremio, bridge.flimmer = (
+        cls(None, True) for cls in (CouchsideHook, StremioHook, FlimmerHook)
+    )
     bridge.vacuumtube = VacuumTubeHook(True)
     bridge.power, bridge.audio = SimpleNamespace(state={}), SimpleNamespace(state={})
     bridge.lights = SimpleNamespace(state={"ledfx": {}, "hyperhdr": {}}, enabled=True)
-    player = {"bus_name": "org.mpris.MediaPlayer2.x", "name": "X", "desktop": "", "app": None,
-              "state": "idle", "role": "other"}
-    bridge.sessions = SimpleNamespace(players={}, receipts={},
-                                      mpris=SimpleNamespace(players={"mpris::1.1": player}, followers={}))
+    player = {
+        "bus_name": "org.mpris.MediaPlayer2.x",
+        "name": "X",
+        "desktop": "",
+        "app": None,
+        "state": "idle",
+        "role": "other",
+    }
+    bridge.sessions = SimpleNamespace(
+        players={}, receipts={}, mpris=SimpleNamespace(players={"mpris::1.1": player}, followers={})
+    )
     for hook in (bridge.couchside, bridge.stremio, bridge.flimmer, bridge.vacuumtube):
         recorder.hook_error(hook, BridgeError("not_ready", "unavailable"))
-    recorder.command_finished(recorder.command_started("r", {"command": "get_state"}, "websocket"), {"ok": True})
+    recorder.command_finished(
+        recorder.command_started("r", {"command": "get_state"}, "websocket"), {"ok": True}
+    )
     recorder.handler.handle(logging.LogRecord("bigscreen_bridge.x", logging.INFO, "", 0, "line", (), None))
     return bridge.snapshot(), recorder.to_dict(bridge)
 
@@ -56,8 +66,9 @@ SNAPSHOT, DIAGNOSTICS = reference()
 
 
 def test_index_lists_every_fixture():
-    assert sorted(entry["file"] for entry in INDEX) == sorted(p.name for p in FIXTURES.glob("*.json")
-                                                              if p.name != "index.json")
+    assert sorted(entry["file"] for entry in INDEX) == sorted(
+        p.name for p in FIXTURES.glob("*.json") if p.name != "index.json"
+    )
 
 
 @pytest.mark.parametrize("entry", INDEX, ids=[entry["id"] for entry in INDEX])

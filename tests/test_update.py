@@ -1,29 +1,48 @@
 """The self-updater: which release to take, when, and what happens if it fails."""
+
 import hashlib
 import io
 import json
 import tarfile
 
 import pytest
-
-from bigscreen_bridge.update import UpdateError, is_playing, parse_version, pick_release, run, verify_and_extract
+from bigscreen_bridge.update import (
+    UpdateError,
+    is_playing,
+    parse_version,
+    pick_release,
+    run,
+    verify_and_extract,
+)
 
 STABLE = {"tag_name": "v0.3.1", "prerelease": False, "draft": False}
 
 
 def test_versions_order_prereleases_before_final():
-    assert parse_version("v0.3.1rc1") < parse_version("0.3.1rc2") < parse_version("0.3.1") < parse_version("0.3.2rc1")
-    assert parse_version("0.3") is None and parse_version("latest") is None and parse_version("0.3.1-x") is None
+    assert (
+        parse_version("v0.3.1rc1")
+        < parse_version("0.3.1rc2")
+        < parse_version("0.3.1")
+        < parse_version("0.3.2rc1")
+    )
+    assert (
+        parse_version("0.3") is None and parse_version("latest") is None and parse_version("0.3.1-x") is None
+    )
 
 
 def test_stable_channel_skips_prereleases_and_drafts():
-    releases = [{"tag_name": "v0.4.0rc1", "prerelease": True, "draft": False},
-                {"tag_name": "v0.3.2", "prerelease": False, "draft": True},
-                STABLE, {"tag_name": "nightly", "prerelease": False, "draft": False}]
+    releases = [
+        {"tag_name": "v0.4.0rc1", "prerelease": True, "draft": False},
+        {"tag_name": "v0.3.2", "prerelease": False, "draft": True},
+        STABLE,
+        {"tag_name": "nightly", "prerelease": False, "draft": False},
+    ]
     assert pick_release(releases, "stable", "0.3.0")["tag_name"] == "v0.3.1"
     assert pick_release(releases, "prerelease", "0.3.0")["tag_name"] == "v0.4.0rc1"
     assert pick_release(releases, "stable", "0.3.1") is None
-    assert pick_release(releases, "stable", "unknown")["tag_name"] == "v0.3.1"   # a dev install takes any release
+    assert (
+        pick_release(releases, "stable", "unknown")["tag_name"] == "v0.3.1"
+    )  # a dev install takes any release
 
 
 def archive(tmp_path, members):
@@ -73,7 +92,9 @@ class Tv:
         (self.root / "venvs" / "0.3.0").mkdir(parents=True)
         (self.root / "venv").symlink_to(self.root / "venvs" / "0.3.0")
         self.config = tmp_path / "config.json"
-        self.config.write_text(json.dumps({"token": "secret-token", **({"update": update} if update else {})}))
+        self.config.write_text(
+            json.dumps({"token": "secret-token", **({"update": update} if update else {})})
+        )
         self.playing, self.healthy = playing, healthy
         self.releases = releases if isinstance(releases, Exception) else list(releases)
         self.installed, self.sleeps, self.lines, self.restarts = [], [], [], 0
@@ -98,9 +119,19 @@ class Tv:
         self.restarts += 1
 
     def run(self, **kwargs):
-        return run(self.config, installed="0.3.0", root=self.root, fetch=self.fetch, read_status=self.read_status,
-                   install=self.install, health=lambda: self.healthy, restart=self.restart,
-                   sleep=self.sleeps.append, log=self.lines.append, **kwargs)
+        return run(
+            self.config,
+            installed="0.3.0",
+            root=self.root,
+            fetch=self.fetch,
+            read_status=self.read_status,
+            install=self.install,
+            health=lambda: self.healthy,
+            restart=self.restart,
+            sleep=self.sleeps.append,
+            log=self.lines.append,
+            **kwargs,
+        )
 
 
 def test_installs_a_newer_release_when_nothing_plays(tmp_path):
@@ -141,17 +172,22 @@ def test_failed_health_rolls_back(tmp_path):
 
 def test_a_failed_install_rolls_back_too(tmp_path):
     tv = Tv(tmp_path)
+
     def broken(release):
         Tv.install(tv, release)
         raise UpdateError("install-tv.sh failed")
+
     tv.install = broken
     assert tv.run() == 1
     assert (tv.root / "venv").resolve() == (tv.root / "venvs" / "0.3.0").resolve() and tv.restarts == 1
 
 
 def test_prerelease_channel_from_config(tmp_path):
-    tv = Tv(tmp_path, update={"channel": "prerelease"},
-            releases=[STABLE, {"tag_name": "v0.3.2rc1", "prerelease": True, "draft": False}])
+    tv = Tv(
+        tmp_path,
+        update={"channel": "prerelease"},
+        releases=[STABLE, {"tag_name": "v0.3.2rc1", "prerelease": True, "draft": False}],
+    )
     tv.install = lambda release: tv.installed.append(release["tag_name"])
     assert tv.run() == 0 and tv.installed == ["v0.3.2rc1"]
 
@@ -170,11 +206,25 @@ def test_up_to_date_says_so(tmp_path):
 
 def test_an_unexpected_failure_after_install_still_rolls_back(tmp_path):
     tv = Tv(tmp_path)
+
     def broken_health():
         raise AttributeError("'list' object has no attribute 'get'")
-    assert run(tv.config, installed="0.3.0", root=tv.root, fetch=tv.fetch, read_status=tv.read_status,
-               install=tv.install, health=broken_health, restart=tv.restart, sleep=tv.sleeps.append,
-               log=tv.lines.append) == 1
+
+    assert (
+        run(
+            tv.config,
+            installed="0.3.0",
+            root=tv.root,
+            fetch=tv.fetch,
+            read_status=tv.read_status,
+            install=tv.install,
+            health=broken_health,
+            restart=tv.restart,
+            sleep=tv.sleeps.append,
+            log=tv.lines.append,
+        )
+        == 1
+    )
     assert (tv.root / "venv").resolve() == (tv.root / "venvs" / "0.3.0").resolve() and tv.restarts == 1
 
 
@@ -182,17 +232,20 @@ def test_a_release_that_failed_is_skipped_until_a_newer_one(tmp_path):
     tv = Tv(tmp_path, healthy=False)
     assert tv.run() == 1 and tv.installed == ["v0.3.1"]
     tv.healthy = True
-    assert tv.run() == 0 and tv.installed == ["v0.3.1"]          # not retried
+    assert tv.run() == 0 and tv.installed == ["v0.3.1"]  # not retried
     assert "0.3.1" in tv.lines[-1] and "failed before" in tv.lines[-1]
     tv.releases.append({"tag_name": "v0.3.2", "prerelease": False, "draft": False})
     tv.install = lambda release: tv.installed.append(release["tag_name"])
     assert tv.run() == 0 and tv.installed == ["v0.3.1", "v0.3.2"]
 
 
-@pytest.mark.parametrize(("host", "expected"), [("0.0.0.0", "127.0.0.1"), ("192.168.30.153", "192.168.30.153"),
-                                                 (None, "127.0.0.1"), ("::", "::1")])
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [("0.0.0.0", "127.0.0.1"), ("192.168.30.153", "192.168.30.153"), (None, "127.0.0.1"), ("::", "::1")],
+)
 def test_health_asks_the_address_the_bridge_listens_on(tmp_path, host, expected):
     from bigscreen_bridge.update import health_url
+
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"port": 9000, **({"host": host} if host else {})}))
     wanted = f"[{expected}]" if ":" in expected else expected

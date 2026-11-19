@@ -1,5 +1,7 @@
 """UI-only Couchside adapter. Music Assistant retains all playback ownership."""
+
 import re
+from typing import ClassVar
 
 from .adapters import BridgeError
 from .hooks import DBusHook
@@ -19,7 +21,8 @@ def validate_content(kind, value):
     if kind == "search" and len(value) > 512:
         raise BridgeError("invalid_request", "Search is limited to 512 characters")
     if kind not in ("now_playing", "search") and not re.fullmatch(
-            r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}://" + kind + r"/[^\s?#]{1,1536}", value):
+        r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}://" + kind + r"/[^\s?#]{1,1536}", value
+    ):
         raise BridgeError("invalid_request", "Use a Music Assistant URI matching the content type")
     return kind, value
 
@@ -31,7 +34,7 @@ class CouchsideHook(DBusHook):
     bus_name = BUS_NAME
     object_path = OBJECT_PATH
     timeout = 3
-    timeouts = {"navigate": 25, "browse": 20}
+    timeouts: ClassVar[dict[str, float]] = {"navigate": 25, "browse": 20}
     timeout_code = "not_ready"
     require_result_object = False
 
@@ -46,9 +49,11 @@ class CouchsideHook(DBusHook):
 
     async def navigate(self, request_id, kind, value):
         # Now Playing needs only the UI; everything else is resolved through Music Assistant.
-        await self.wait_ready(10, lambda: self.is_ready() and (
-            kind == "now_playing" or self.state.get("music_assistant_ready")),
-            "Couchside UI control did not become ready")
+        await self.wait_ready(
+            10,
+            lambda: self.is_ready() and (kind == "now_playing" or self.state.get("music_assistant_ready")),
+            "Couchside UI control did not become ready",
+        )
         if kind not in self.state["content_types"]:
             raise BridgeError("unsupported", "The running Couchside does not support this content type")
         self.state = await self.request("navigate", request_id, content_type=kind, content_id=value)

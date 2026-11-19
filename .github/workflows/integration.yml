@@ -1,0 +1,46 @@
+name: Integration
+
+# The real system in Docker: a headless Plasma Bigscreen TV with real Flatpak apps and
+# the bridge. Reports only; never a required check.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * *"
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - tests/integration/**
+      - .github/workflows/integration.yml
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    name: Headless Bigscreen TV
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Flatpak cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/flatpak
+          key: flatpak-${{ github.run_id }}
+          restore-keys: flatpak-
+      - name: Virtual GPU devices for KWin
+        run: |
+          sudo modprobe vgem || sudo apt-get install -y "linux-modules-extra-$(uname -r)" && sudo modprobe vgem || true
+          sudo modprobe vkms || true
+          # KWin opens the render node as soon as the container boots; the TV user must
+          # already be allowed to.
+          sudo chmod a+rw /dev/dri/* || true
+          ls -l /dev/dri || echo "no /dev/dri"
+      - name: TV container, bridge and Couchside
+        env:
+          FLATPAK_CACHE: ${{ runner.temp }}/flatpak
+        run: sh tests/integration/spike.sh
+      - name: Hand the Flatpak cache back to the runner user
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/flatpak" || true

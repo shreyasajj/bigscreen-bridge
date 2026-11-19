@@ -2,12 +2,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from homeassistant.components.media_player import MediaPlayerEntityFeature, MediaPlayerState
-from homeassistant.exceptions import HomeAssistantError
-
 from bigscreen_bridge.adapters import APPS, BridgeError
 from bigscreen_bridge.stremio import validate_content, validate_seek
 from custom_components.bigscreen_bridge.media_player import BigscreenPlayer
+from homeassistant.components.media_player import MediaPlayerEntityFeature, MediaPlayerState
+from homeassistant.exceptions import HomeAssistantError
+
 
 @pytest.mark.parametrize(
     "kind,value",

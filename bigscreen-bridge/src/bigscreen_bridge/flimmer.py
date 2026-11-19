@@ -1,9 +1,10 @@
 """Flimmer's local channel catalogue and acknowledged player controls."""
+
 import asyncio
 import re
 
 from .adapters import BridgeError
-from .hooks import DBusHook, validate_page  # noqa: F401  (re-exported for callers)
+from .hooks import DBusHook, validate_page
 
 BUS_NAME = "io.github.jclsn.Flimmer.Control"
 OBJECT_PATH = "/io/github/jclsn/Flimmer/Control"
@@ -26,8 +27,12 @@ class FlimmerHook(DBusHook):
 
     def accept(self, state):
         state = super().accept(state)
-        if (not isinstance(state.get("ready"), bool) or state["content_types"] != ["channel"]
-                or not isinstance(state.get("media"), dict) or not isinstance(state.get("capabilities"), list)):
+        if (
+            not isinstance(state.get("ready"), bool)
+            or state["content_types"] != ["channel"]
+            or not isinstance(state.get("media"), dict)
+            or not isinstance(state.get("capabilities"), list)
+        ):
             raise BridgeError("invalid_response", "Unsupported Flimmer control protocol")
         return state
 
@@ -69,7 +74,9 @@ class FlimmerHook(DBusHook):
                 if not isinstance(item["name"], str):
                     raise ValueError("Invalid channel name")
             next_offset = result["next_offset"]
-            if next_offset is not None and (type(next_offset) is not int or not offset < next_offset <= 1000000):
+            if next_offset is not None and (
+                type(next_offset) is not int or not offset < next_offset <= 1000000
+            ):
                 raise ValueError("Invalid page continuation")
         except (KeyError, TypeError, ValueError, BridgeError) as exc:
             raise BridgeError("invalid_response", "Invalid Flimmer channel catalogue") from exc

@@ -1,4 +1,5 @@
 """Which version a release gets: from the tag, or the next pre-release for a security fix."""
+
 import importlib.util
 from pathlib import Path
 
@@ -13,7 +14,9 @@ spec.loader.exec_module(release_version)
 def test_next_prerelease_after_latest_stable():
     assert release_version.next_prerelease(["v0.3.0", "v0.2.9"], "0.3.0") == "0.3.1rc1"
     assert release_version.next_prerelease(["v0.3.0", "v0.3.1rc1", "v0.3.1rc2"], "0.3.0") == "0.3.1rc3"
-    assert release_version.next_prerelease(["v0.3.0", "v0.4.0rc1", "junk", "v0.3.1rc9"], "0.3.0") == "0.3.1rc10"
+    assert (
+        release_version.next_prerelease(["v0.3.0", "v0.4.0rc1", "junk", "v0.3.1rc9"], "0.3.0") == "0.3.1rc10"
+    )
 
 
 def test_first_prerelease_without_any_stable_uses_project_version():
@@ -38,8 +41,12 @@ def test_tag_must_match_project_version(tmp_path, capsys):
 def test_cli_prints_the_next_prerelease(tmp_path, capsys):
     tags = tmp_path / "tags"
     tags.write_text("v0.3.0\nv0.3.1rc1\n")
-    assert release_version.main(["next-prerelease", "--pyproject", str(pyproject(tmp_path, "0.3.0")),
-                                 "--tags-file", str(tags)]) == 0
+    assert (
+        release_version.main(
+            ["next-prerelease", "--pyproject", str(pyproject(tmp_path, "0.3.0")), "--tags-file", str(tags)]
+        )
+        == 0
+    )
     assert capsys.readouterr().out.strip() == "0.3.1rc2"
 
 

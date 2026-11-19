@@ -10,25 +10,26 @@ code is kept available all the time; afterwards one is made only on request
 (`StartPairing()` on the session bus). Redeeming a code ends it at once. Codes and
 tokens never reach logs, diagnostics, WebSocket replies other than `/pair`, or MQTT.
 """
+
 import asyncio
-from collections import deque
 import hashlib
 import hmac
 import json
 import logging
 import os
-from pathlib import Path
 import re
 import secrets
 import time
-from datetime import datetime, timezone
+from collections import deque
+from datetime import UTC, datetime
+from pathlib import Path
 
 from .adapters import BridgeError
 from .diagnostics import utc
 
 LOG = logging.getLogger(__name__)
 
-ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ"     # no 0/O, 1/I/L or U: readable from a sofa
+ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ"  # no 0/O, 1/I/L or U: readable from a sofa
 CODE_LENGTH = 8
 LIFETIME = 300
 MAX_FAILURES = 5
@@ -82,8 +83,11 @@ class Pairing:
         try:
             data = json.loads(self.path.read_text())
             clients = data.get("clients", []) if isinstance(data, dict) else []
-            return [c for c in clients if isinstance(c, dict) and isinstance(c.get("hash"), str)
-                    and len(c["hash"]) == 64][:MAX_CLIENTS]
+            return [
+                c
+                for c in clients
+                if isinstance(c, dict) and isinstance(c.get("hash"), str) and len(c["hash"]) == 64
+            ][:MAX_CLIENTS]
         except FileNotFoundError:
             return []
         except (OSError, ValueError):
@@ -150,9 +154,13 @@ class Pairing:
         self.refresh()
         if self.code is None:
             return None
-        return {"code": self.code[:4] + "-" + self.code[4:], "reason": self.reason,
-                "expires_at": utc(datetime.fromtimestamp(self.clock() + max(0.0, self.expires - self.monotonic()),
-                                                         timezone.utc))}
+        return {
+            "code": self.code[:4] + "-" + self.code[4:],
+            "reason": self.reason,
+            "expires_at": utc(
+                datetime.fromtimestamp(self.clock() + max(0.0, self.expires - self.monotonic()), UTC)
+            ),
+        }
 
     def summary(self):
         self._reload()
@@ -161,9 +169,13 @@ class Pairing:
     def _summary(self):
         """For diagnostics: never the code itself."""
         active = self.code is not None and not self._expired()
-        return {"active": active, "reason": self.reason if active else None, "paired_clients": len(self.clients),
-                "last_paired_at": self.last_paired and self.last_paired["at"],
-                "last_paired_name": self.last_paired and self.last_paired["name"]}
+        return {
+            "active": active,
+            "reason": self.reason if active else None,
+            "paired_clients": len(self.clients),
+            "last_paired_at": self.last_paired and self.last_paired["at"],
+            "last_paired_name": self.last_paired and self.last_paired["name"],
+        }
 
     # -- redeeming and checking -------------------------------------------------
 
@@ -184,7 +196,7 @@ class Pairing:
                 if self.failures >= MAX_FAILURES:
                     LOG.warning("Pairing code withdrawn after %d wrong attempts", self.failures)
                     self._end()
-                    self.refresh()   # a fresh code if nothing has paired yet
+                    self.refresh()  # a fresh code if nothing has paired yet
                     self.changed()
                 else:
                     LOG.warning("Rejected a pairing attempt (%d left)", MAX_FAILURES - self.failures)
@@ -192,8 +204,10 @@ class Pairing:
         if len(self.clients) >= MAX_CLIENTS:
             raise BridgeError("too_many_clients", "Too many paired clients")
         token = secrets.token_urlsafe(32)
-        at = utc(datetime.fromtimestamp(self.clock(), timezone.utc))
-        self.clients.append({"id": secrets.token_hex(8), "name": name, "hash": digest(token), "created_at": at})
+        at = utc(datetime.fromtimestamp(self.clock(), UTC))
+        self.clients.append(
+            {"id": secrets.token_hex(8), "name": name, "hash": digest(token), "created_at": at}
+        )
         self._save()
         self.last_paired = {"name": name, "at": at}
         self._end()
@@ -213,6 +227,7 @@ class Pairing:
 def main(argv=None):
     """`bigscreen-bridge-clients list` / `revoke <id>`: manage paired clients on the TV."""
     import argparse
+
     parser = argparse.ArgumentParser(prog="bigscreen-bridge-clients")
     parser.add_argument("--config-dir", type=Path, default=Path.home() / ".config" / "bigscreen-bridge")
     commands = parser.add_subparsers(dest="command", required=True)

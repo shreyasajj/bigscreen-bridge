@@ -10,13 +10,14 @@ This never creates Home Assistant entities (no MQTT Discovery) and is separate
 from Stremio TV's own MQTT link. Anyone allowed to publish on the broker can send
 commands, so command handling is opt-in and the broker is the trust boundary.
 """
+
 import asyncio
-from collections import OrderedDict
 import contextlib
 import json
 import logging
 import re
 import ssl
+from collections import OrderedDict
 
 from .diagnostics import NULL
 
@@ -31,25 +32,42 @@ def settings(config):
         return None
     base = raw.get("base_topic", "bigscreen") if isinstance(raw, dict) else None
     port = raw.get("port", 1883) if isinstance(raw, dict) else None
-    if (not isinstance(raw, dict) or not isinstance(raw.get("host"), str) or not raw["host"]
-            or type(port) is not int or not 1 <= port <= 65535
-            or not isinstance(base, str) or not _TOPIC.fullmatch(base)
-            or not _TOPIC.fullmatch(config["device_id"])
-            or any(not isinstance(raw.get(key, ""), str) for key in ("username", "password"))
-            or any(not isinstance(raw.get(key, False), bool) for key in ("tls", "commands"))):
+    if (
+        not isinstance(raw, dict)
+        or not isinstance(raw.get("host"), str)
+        or not raw["host"]
+        or type(port) is not int
+        or not 1 <= port <= 65535
+        or not isinstance(base, str)
+        or not _TOPIC.fullmatch(base)
+        or not _TOPIC.fullmatch(config["device_id"])
+        or any(not isinstance(raw.get(key, ""), str) for key in ("username", "password"))
+        or any(not isinstance(raw.get(key, False), bool) for key in ("tls", "commands"))
+    ):
         raise ValueError("Invalid MQTT settings")
-    return {"host": raw["host"], "port": port, "username": raw.get("username") or None,
-            "password": raw.get("password") or None, "tls": raw.get("tls", False),
-            "commands": raw.get("commands", False), "base": f"{base}/{config['device_id']}"}
+    return {
+        "host": raw["host"],
+        "port": port,
+        "username": raw.get("username") or None,
+        "password": raw.get("password") or None,
+        "tls": raw.get("tls", False),
+        "commands": raw.get("commands", False),
+        "base": f"{base}/{config['device_id']}",
+    }
 
 
 def connect(options):
     """A broker session; imported lazily so the dependency stays optional."""
     import aiomqtt
+
     return aiomqtt.Client(
-        hostname=options["host"], port=options["port"], username=options["username"],
-        password=options["password"], tls_context=ssl.create_default_context() if options["tls"] else None,
-        will=aiomqtt.Will(options["base"] + "/availability", "offline", qos=1, retain=True))
+        hostname=options["host"],
+        port=options["port"],
+        username=options["username"],
+        password=options["password"],
+        tls_context=ssl.create_default_context() if options["tls"] else None,
+        will=aiomqtt.Will(options["base"] + "/availability", "offline", qos=1, retain=True),
+    )
 
 
 class MqttLink:
@@ -63,12 +81,18 @@ class MqttLink:
 
     async def publish_state(self):
         if self.client:
-            await self.client.publish(self.base + "/state", json.dumps(self.bridge.snapshot()), qos=1, retain=True)
+            await self.client.publish(
+                self.base + "/state", json.dumps(self.bridge.snapshot()), qos=1, retain=True
+            )
 
     async def _command(self, payload):
         if len(payload) > 16384:
-            response = {"type": "result", "id": None, "ok": False,
-                        "error": {"code": "invalid_request", "message": "Request too large"}}
+            response = {
+                "type": "result",
+                "id": None,
+                "ok": False,
+                "error": {"code": "invalid_request", "message": "Request too large"},
+            }
         else:
             response = await self.bridge.handle(payload, self.cache, transport="mqtt")
         await self.client.publish(self.base + "/response", json.dumps(response), qos=1)
@@ -84,12 +108,15 @@ class MqttLink:
                     await client.subscribe(self.base + "/command", qos=1)
                 async for message in client.messages:
                     payload = message.payload
-                    await self._command(payload.decode(errors="replace") if isinstance(payload, bytes) else str(payload))
+                    await self._command(
+                        payload.decode(errors="replace") if isinstance(payload, bytes) else str(payload)
+                    )
             except asyncio.CancelledError:
                 # A clean stop says so itself instead of waiting for the broker's last will.
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(
-                        client.publish(self.base + "/availability", "offline", qos=1, retain=True), 2)
+                        client.publish(self.base + "/availability", "offline", qos=1, retain=True), 2
+                    )
                 raise
             finally:
                 self.client = None

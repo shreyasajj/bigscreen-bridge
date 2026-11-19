@@ -4,8 +4,10 @@ The socket is request/response only. Chromium already publishes the page's media
 session as an MPRIS player, so the bridge treats that player's signals as this
 hook's change notification and reads the authoritative state from the socket.
 """
+
 import math
 import re
+from typing import ClassVar
 
 from .adapters import BridgeError
 from .hooks import SocketHook
@@ -20,18 +22,26 @@ def validate_content(kind, value):
         raise BridgeError("unsupported", "Unsupported YouTube content type")
     if not isinstance(value, str):
         raise BridgeError("invalid_request", "YouTube content ID must be a string")
-    if ((kind == "video" and not VIDEO_ID.fullmatch(value))
-            or (kind == "playlist" and not PLAYLIST_ID.fullmatch(value))
-            or (kind == "search" and (not value.strip() or len(value) > 200
-                                      or any(ord(c) < 32 or ord(c) == 127 for c in value)))):
+    if (
+        (kind == "video" and not VIDEO_ID.fullmatch(value))
+        or (kind == "playlist" and not PLAYLIST_ID.fullmatch(value))
+        or (
+            kind == "search"
+            and (not value.strip() or len(value) > 200 or any(ord(c) < 32 or ord(c) == 127 for c in value))
+        )
+    ):
         raise BridgeError("invalid_request", "Invalid YouTube content ID")
     return kind, value
 
 
 def validate_volume(value):
     try:
-        valid = (not isinstance(value, bool) and isinstance(value, (int, float))
-                 and math.isfinite(value) and 0 <= value <= 1)
+        valid = (
+            not isinstance(value, bool)
+            and isinstance(value, (int, float))
+            and math.isfinite(value)
+            and 0 <= value <= 1
+        )
     except OverflowError:
         valid = False
     if not valid:
@@ -43,8 +53,8 @@ class VacuumTubeHook(SocketHook):
     label = "VacuumTube"
     kinds = KINDS
     socket_name = "vacuumtube.sock"
-    timeouts = {"open": 25}
-    settle = 1.2    # the renderer republishes its state once a second
+    timeouts: ClassVar[dict[str, float]] = {"open": 25}
+    settle = 1.2  # the renderer republishes its state once a second
 
     @property
     def polled(self):
@@ -53,22 +63,32 @@ class VacuumTubeHook(SocketHook):
 
     def accept(self, state):
         state = super().accept(state)
-        if (not isinstance(state.get("ready"), bool) or not isinstance(state.get("capabilities"), list)
-                or not isinstance(state.get("media"), dict)):
+        if (
+            not isinstance(state.get("ready"), bool)
+            or not isinstance(state.get("capabilities"), list)
+            or not isinstance(state.get("media"), dict)
+        ):
             raise BridgeError("invalid_response", "Unsupported VacuumTube control protocol")
         media = state["media"]
         video_id = media.get("video_id")
         if video_id:
             validate_content("video", video_id)
             # Artwork comes from the fixed thumbnail host, never from app-supplied URLs.
-            media = {**media, "content_id": video_id, "type": "video",
-                     "poster": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"}
+            media = {
+                **media,
+                "content_id": video_id,
+                "type": "video",
+                "poster": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+            }
         return {**state, "media": media}
 
     async def open(self, request_id, kind, value):
         validate_content(kind, value)
-        await self.wait_ready(20, lambda: self.is_ready() and kind in self.content_types,
-                              "YouTube Leanback did not become ready")
+        await self.wait_ready(
+            20,
+            lambda: self.is_ready() and kind in self.content_types,
+            "YouTube Leanback did not become ready",
+        )
         result = await self.request("open", request_id, content_type=kind, content_id=value)
         await self.refresh()
         return result

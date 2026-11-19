@@ -1,11 +1,11 @@
 """Pairing codes shown on the TV and the per-client tokens they are exchanged for."""
+
 import json
 import logging
 import os
 import stat
 
 import pytest
-
 from bigscreen_bridge.adapters import BridgeError
 from bigscreen_bridge.pairing import ALPHABET, LIFETIME, MAX_FAILURES, Pairing, normalize
 from bigscreen_bridge.status import PAIRING_INTERFACE, PairingInterface
@@ -33,12 +33,12 @@ def test_a_code_stays_available_until_something_pairs(pairing, clock):
     renewed = pairing.public()
     assert renewed["code"] != shown["code"] and renewed["reason"] == "unpaired"
     token = pairing.redeem(renewed["code"], "Home Assistant")
-    assert pairing.public() is None   # paired: the code is gone and none replaces it
+    assert pairing.public() is None  # paired: the code is gone and none replaces it
     assert pairing.accepts(token) and not pairing.accepts(token + "x") and not pairing.accepts("")
     pairing.start()
     assert pairing.public()["reason"] == "requested"
     clock.tick(LIFETIME + 1)
-    assert pairing.public() is None   # a requested code is not renewed by itself
+    assert pairing.public() is None  # a requested code is not renewed by itself
 
 
 def test_each_pairing_gets_its_own_token_and_only_its_hash_is_stored(pairing, tmp_path):
@@ -86,8 +86,9 @@ async def test_pair_endpoint_issues_a_token_the_websocket_accepts(bridge, pairin
     caplog.set_level(logging.INFO, logger="bigscreen_bridge")
     code = pairing.public()["code"]
     assert (await http.post("/pair", json={"code": "2222-2222", "name": "HA"})).status == 403
-    assert (await http.post("/pair", json={"code": code, "name": "HA"},
-                            headers={"Origin": "http://evil"})).status == 400
+    assert (
+        await http.post("/pair", json={"code": code, "name": "HA"}, headers={"Origin": "http://evil"})
+    ).status == 400
     assert (await http.post("/pair", json={"code": code, "name": "HA", "extra": 1})).status == 400
     assert (await http.post("/pair", data=b"not json")).status == 400
     reply = await http.post("/pair", json={"code": code, "name": "Home Assistant"})
@@ -95,9 +96,9 @@ async def test_pair_endpoint_issues_a_token_the_websocket_accepts(bridge, pairin
     assert reply.status == 200 and body["device_id"] == "test-device" and body["name"] == "TV"
     async with http.ws_connect("/ws", headers={"Authorization": "Bearer " + body["token"]}) as ws:
         assert (await ws.receive_json())["type"] == "state"
-    async with http.ws_connect("/ws", headers=AUTH) as ws:   # the configured token still works
+    async with http.ws_connect("/ws", headers=AUTH) as ws:  # the configured token still works
         assert (await ws.receive_json())["type"] == "state"
-    assert (await http.post("/pair", json={"code": code, "name": "HA"})).status == 403   # used up
+    assert (await http.post("/pair", json={"code": code, "name": "HA"})).status == 403  # used up
     diagnostics = json.dumps(b.diagnostics.to_dict(b))
     assert code.replace("-", "") not in diagnostics and code not in diagnostics
     assert body["token"] not in diagnostics and body["token"] not in caplog.text
@@ -126,6 +127,7 @@ def test_the_only_session_bus_write_starts_pairing(pairing):
 
 def test_revoking_a_client_takes_effect_without_a_restart(pairing, tmp_path, capsys):
     from bigscreen_bridge.pairing import main
+
     token = pairing.redeem(pairing.public()["code"], "Old HA")
     client_id = pairing.clients[0]["id"]
     assert main(["--config-dir", str(tmp_path), "list"]) == 0
@@ -133,5 +135,5 @@ def test_revoking_a_client_takes_effect_without_a_restart(pairing, tmp_path, cap
     assert client_id in listed and "Old HA" in listed and token not in listed
     assert main(["--config-dir", str(tmp_path), "revoke", "nope"]) == 1
     assert main(["--config-dir", str(tmp_path), "revoke", client_id]) == 0
-    assert not pairing.accepts(token)            # the running bridge notices the file change
-    assert pairing.public()["reason"] == "unpaired"   # nothing paired again: a code returns
+    assert not pairing.accepts(token)  # the running bridge notices the file change
+    assert pairing.public()["reason"] == "unpaired"  # nothing paired again: a code returns

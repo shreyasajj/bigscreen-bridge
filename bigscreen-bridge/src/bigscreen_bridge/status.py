@@ -13,6 +13,7 @@ that changes anything: it replaces the pairing code shown on the TV.
 The session bus is private to the logged-in user, who can already read the bridge's
 config and token, so this exposes nothing beyond that boundary.
 """
+
 import asyncio
 import logging
 import time
@@ -31,7 +32,7 @@ class StatusInterface(ServiceInterface):
         self.read = read
 
     @method()
-    def Status(self) -> 's':
+    def Status(self) -> "s":
         return self.read()
 
     @signal()

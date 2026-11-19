@@ -4,12 +4,13 @@ from pathlib import Path
 
 import aiohttp
 import pytest
-
 from bigscreen_bridge.adapters import APPS, BridgeError
 
 # Load the transport client without importing Home Assistant's integration package.
-spec = importlib.util.spec_from_file_location("bridge_client", Path(__file__).parents[2]
-    / "ha-bigscreen-bridge/custom_components/bigscreen_bridge/client.py")
+spec = importlib.util.spec_from_file_location(
+    "bridge_client",
+    Path(__file__).parents[2] / "ha-bigscreen-bridge/custom_components/bigscreen_bridge/client.py",
+)
 client_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(client_module)
 
@@ -21,8 +22,14 @@ async def result(ws):
             return data
 
 
-@pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer wrong"},
-    {"Authorization": "Bearer " + "a" * 48, "Origin": "http://untrusted"}])
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"Authorization": "Bearer wrong"},
+        {"Authorization": "Bearer " + "a" * 48, "Origin": "http://untrusted"},
+    ],
+)
 async def test_auth_and_browser_origins(bridge, headers):
     _, http = bridge
     with pytest.raises(aiohttp.WSServerHandshakeError) as exc:
@@ -41,12 +48,12 @@ async def test_invalid_json_id_and_unsupported_content(bridge):
     async with http.ws_connect("/ws", headers={"Authorization": "Bearer " + "a" * 48}) as ws:
         initial = await ws.receive_json()
         assert initial["active_app"] is None
-        for payload in ["{", "[]", '{"command":"focus"}',
-                        '{"id":4,"command":"focus"}']:
+        for payload in ["{", "[]", '{"command":"focus"}', '{"id":4,"command":"focus"}']:
             await ws.send_str(payload)
             assert (await result(ws))["error"]["code"] == "invalid_request"
-        await ws.send_json({"id": "unsupported", "command": "focus", "app": "flimmer",
-                            "content": {"channel": "123"}})
+        await ws.send_json(
+            {"id": "unsupported", "command": "focus", "app": "flimmer", "content": {"channel": "123"}}
+        )
         assert (await result(ws))["error"]["code"] == "unsupported"
         assert not b.wm.focused
 
@@ -121,18 +128,23 @@ async def test_concurrent_launch_waits_for_readiness_once(bridge, monkeypatch):
 async def test_client_commands_push_disconnect_and_reconnect(bridge):
     b, http = bridge
     states = []
+    pushed = asyncio.Event()
     disconnected = asyncio.Event()
+
+    def on_state(state):
+        states.append(state)
+        pushed.set()
+
     async with aiohttp.ClientSession() as session:
-        client = client_module.BridgeClient(session, str(http.make_url("")), "a" * 48,
-                                           states.append, disconnected.set)
+        client = client_module.BridgeClient(
+            session, str(http.make_url("")), "a" * 48, on_state, disconnected.set
+        )
         initial = await client.connect()
         assert initial["device_id"] == "test-device"
         assert len((await client.command("browse"))["items"]) == 4
         b.wm.windows = [{"id": "new", "desktop": APPS[3].flatpak, "active": True}]
         await b.notify()
-        async with asyncio.timeout(1):
-            while not states:
-                await asyncio.sleep(0.01)
+        await asyncio.wait_for(pushed.wait(), 1)
         assert states[-1]["active_app"] == "vacuumtube"
         await next(iter(b.clients)).close()
         await asyncio.wait_for(disconnected.wait(), 1)
@@ -142,8 +154,10 @@ async def test_client_commands_push_disconnect_and_reconnect(bridge):
         await client.close()
 
 
-@pytest.mark.parametrize("url", ["file:///etc/passwd", "http://user:pass@tv", "http://tv/ws",
-                                 "http://tv?token=x", "http://tv:99999"])
+@pytest.mark.parametrize(
+    "url",
+    ["file:///etc/passwd", "http://user:pass@tv", "http://tv/ws", "http://tv?token=x", "http://tv:99999"],
+)
 def test_reject_unsafe_bridge_addresses(url):
     with pytest.raises(ValueError):
         client_module.validate_url(url)

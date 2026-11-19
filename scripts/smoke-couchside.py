@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Run on the TV with the bridge venv; exercise only UI navigation, never playback."""
+
 import argparse
 import asyncio
 import json
 import uuid
+from pathlib import Path
 
 from dbus_next import Message, MessageType
 from dbus_next.aio import MessageBus
@@ -14,9 +16,19 @@ PATH = "/io/github/shreyasajj/Couchside/Control"
 
 async def request(bus, command, request_id=None, **kwargs):
     request_id = request_id or str(uuid.uuid4())
-    reply = await asyncio.wait_for(bus.call(Message(destination=BUS, path=PATH,
-        interface=BUS, member="Execute", signature="s",
-        body=[json.dumps(dict(id=request_id, command=command, **kwargs))])), 30)
+    reply = await asyncio.wait_for(
+        bus.call(
+            Message(
+                destination=BUS,
+                path=PATH,
+                interface=BUS,
+                member="Execute",
+                signature="s",
+                body=[json.dumps(dict(id=request_id, command=command, **kwargs))],
+            )
+        ),
+        30,
+    )
     assert reply.message_type != MessageType.ERROR, reply.error_name
     data = json.loads(reply.body[0])
     assert data["id"] == request_id
@@ -38,8 +50,7 @@ async def main(items_path):
             assert result["result"]["view"] == {"type": kind, "id": value}
             print("PASS QML navigation:", kind)
         if items_path:
-            with open(items_path) as stream:
-                items = json.load(stream)
+            items = json.loads(await asyncio.to_thread(Path(items_path).read_text))
             for kind, uri in items.items():
                 result = await request(bus, "navigate", content_type=kind, content_id=uri)
                 assert result["ok"], result

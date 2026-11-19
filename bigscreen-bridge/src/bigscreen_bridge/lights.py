@@ -7,6 +7,7 @@ session. Whether each service runs comes from systemd over D-Bus: LedFx as a use
 unit, HyperHDR as a system unit. Everything is localhost and needs no credentials. A
 service that is down only marks its own section unavailable.
 """
+
 import asyncio
 import itertools
 import json
@@ -24,7 +25,7 @@ COMMANDS = ("ledfx_pause", "ledfx_light", "ledfx_scene", "hyperhdr_light")
 TIMEOUT = 3
 PRIORITY = 50
 ORIGIN = "Bigscreen Bridge"
-VIDEO = "Video"       # HyperHDR "effect" that clears our colour or effect and returns to capture
+VIDEO = "Video"  # HyperHDR "effect" that clears our colour or effect and returns to capture
 HEX = re.compile(r"#[0-9a-fA-F]{6}")
 SYSTEMD = "org.freedesktop.systemd1"
 
@@ -32,7 +33,11 @@ SYSTEMD = "org.freedesktop.systemd1"
 async def systemd_state(bus, unit):
     """`active`, `inactive`, `failed`, … or `unknown`."""
     try:
-        path = (await call(bus, SYSTEMD, "/org/freedesktop/systemd1", SYSTEMD + ".Manager", "LoadUnit", "s", [unit]))[0]
+        path = (
+            await call(
+                bus, SYSTEMD, "/org/freedesktop/systemd1", SYSTEMD + ".Manager", "LoadUnit", "s", [unit]
+            )
+        )[0]
         return (await properties(bus, SYSTEMD, path, SYSTEMD + ".Unit")).get("ActiveState") or "unknown"
     except (BridgeError, IndexError, TypeError, AttributeError):
         return "unknown"
@@ -50,11 +55,13 @@ class Lights:
         host, _, port = config.get("hyperhdr_socket", "127.0.0.1:19444").rpartition(":")
         self.socket_address = (host or "127.0.0.1", int(port or 19444))
         self.ledfx_unit = config.get("ledfx_unit", "ledfx.service")
-        self.hyperhdr_unit = config.get("hyperhdr_unit", f"hyperhdr@{user}.service" if user else "hyperhdr.service")
+        self.hyperhdr_unit = config.get(
+            "hyperhdr_unit", f"hyperhdr@{user}.service" if user else "hyperhdr.service"
+        )
         self.session_bus, self.system_bus, self.unit_state = session_bus, system_bus, unit_state
         self.state = {}
         self.http = None
-        self.schema = None          # LedFx effect types: {type: {"name", "keys"}}
+        self.schema = None  # LedFx effect types: {type: {"name", "keys"}}
         self.tans = itertools.count(1)
 
     async def close(self):
@@ -86,53 +93,98 @@ class Lights:
         service = await self.unit_state(self.session_bus, self.ledfx_unit)
         try:
             info, virtuals, devices, scenes = await asyncio.gather(
-                self._ledfx_get("/api/info"), self._ledfx_get("/api/virtuals"),
-                self._ledfx_get("/api/devices"), self._ledfx_get("/api/scenes"))
+                self._ledfx_get("/api/info"),
+                self._ledfx_get("/api/virtuals"),
+                self._ledfx_get("/api/devices"),
+                self._ledfx_get("/api/scenes"),
+            )
             if self.schema is None:
                 effects = (await self._ledfx_get("/api/schema")).get("effects") or {}
-                self.schema = {kind: {"name": (spec.get("name") or kind),
-                                      "keys": set(((spec.get("schema") or spec).get("properties") or {}))}
-                               for kind, spec in effects.items() if isinstance(spec, dict)}
+                self.schema = {
+                    kind: {
+                        "name": (spec.get("name") or kind),
+                        "keys": set((spec.get("schema") or spec).get("properties") or {}),
+                    }
+                    for kind, spec in effects.items()
+                    if isinstance(spec, dict)
+                }
         except (aiohttp.ClientError, TimeoutError, ValueError, AttributeError):
             self.schema = None
-            return {"available": False, "service": service,
-                    "reason": "service_inactive" if service in ("inactive", "failed") else "not_reachable"}
+            return {
+                "available": False,
+                "service": service,
+                "reason": "service_inactive" if service in ("inactive", "failed") else "not_reachable",
+            }
         rows = []
         for vid, virtual in (virtuals.get("virtuals") or {}).items():
             effect = virtual.get("effect") or {}
             config = effect.get("config") or {}
-            rows.append({"id": vid, "name": (virtual.get("config") or {}).get("name") or vid,
-                         "active": bool(virtual.get("active")), "effect": effect.get("type"),
-                         "effect_name": effect.get("name"), "brightness": config.get("brightness"),
-                         "color": config.get("color") if HEX.fullmatch(str(config.get("color", ""))) else None})
+            rows.append(
+                {
+                    "id": vid,
+                    "name": (virtual.get("config") or {}).get("name") or vid,
+                    "active": bool(virtual.get("active")),
+                    "effect": effect.get("type"),
+                    "effect_name": effect.get("name"),
+                    "brightness": config.get("brightness"),
+                    "color": config.get("color") if HEX.fullmatch(str(config.get("color", ""))) else None,
+                }
+            )
         found = devices.get("devices") or {}
-        offline = sorted((d.get("config") or {}).get("name") or did for did, d in found.items() if not d.get("online"))
-        return {"available": True, "reason": None, "service": service, "version": info.get("version"),
-                "paused": bool(virtuals.get("paused")), "virtuals": rows,
-                "devices": {"total": len(found), "online": len(found) - len(offline), "offline": offline},
-                "scenes": [{"id": sid, "name": s.get("name") or sid, "active": bool(s.get("active"))}
-                           for sid, s in (scenes.get("scenes") or {}).items()],
-                "effects": sorted(({"type": k, "name": v["name"]} for k, v in self.schema.items()),
-                                  key=lambda e: e["name"].lower())}
+        offline = sorted(
+            (d.get("config") or {}).get("name") or did for did, d in found.items() if not d.get("online")
+        )
+        return {
+            "available": True,
+            "reason": None,
+            "service": service,
+            "version": info.get("version"),
+            "paused": bool(virtuals.get("paused")),
+            "virtuals": rows,
+            "devices": {"total": len(found), "online": len(found) - len(offline), "offline": offline},
+            "scenes": [
+                {"id": sid, "name": s.get("name") or sid, "active": bool(s.get("active"))}
+                for sid, s in (scenes.get("scenes") or {}).items()
+            ],
+            "effects": sorted(
+                ({"type": k, "name": v["name"]} for k, v in self.schema.items()),
+                key=lambda e: e["name"].lower(),
+            ),
+        }
 
     async def _read_hyperhdr(self):
         service = await self.unit_state(self.system_bus, self.hyperhdr_unit)
         try:
-            async with self._client().post(self.hyperhdr_url + "/json-rpc",
-                                           json={"command": "serverinfo", "tan": next(self.tans)}) as response:
+            async with self._client().post(
+                self.hyperhdr_url + "/json-rpc", json={"command": "serverinfo", "tan": next(self.tans)}
+            ) as response:
                 response.raise_for_status()
                 reply = await response.json(content_type=None)
             info = reply["info"]
         except (aiohttp.ClientError, TimeoutError, ValueError, KeyError, TypeError):
-            return {"available": False, "service": service,
-                    "reason": "service_inactive" if service in ("inactive", "failed") else "not_reachable"}
+            return {
+                "available": False,
+                "service": service,
+                "reason": "service_inactive" if service in ("inactive", "failed") else "not_reachable",
+            }
         components = {c.get("name"): bool(c.get("enabled")) for c in info.get("components") or []}
-        return {"available": True, "reason": None, "service": service, "output": components.get("ALL"),
-                "grabber": (info.get("grabbers") or {}).get("active") or None,
-                "last_error": info.get("lastError") or None,
-                "effects": [e.get("name") for e in info.get("effects") or [] if e.get("name")],
-                "instances": [{"id": i.get("instance"), "name": i.get("friendly_name") or f"Instance {i.get('instance')}",
-                               "running": bool(i.get("running"))} for i in info.get("instance") or []]}
+        return {
+            "available": True,
+            "reason": None,
+            "service": service,
+            "output": components.get("ALL"),
+            "grabber": (info.get("grabbers") or {}).get("active") or None,
+            "last_error": info.get("lastError") or None,
+            "effects": [e.get("name") for e in info.get("effects") or [] if e.get("name")],
+            "instances": [
+                {
+                    "id": i.get("instance"),
+                    "name": i.get("friendly_name") or f"Instance {i.get('instance')}",
+                    "running": bool(i.get("running")),
+                }
+                for i in info.get("instance") or []
+            ],
+        }
 
     # -- commands -------------------------------------------------------------------
 
@@ -173,7 +225,7 @@ class Lights:
             current = bool((await self._ledfx_get("/api/virtuals")).get("paused"))
         except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
             raise BridgeError("service_unavailable", "LedFx did not answer") from exc
-        if current != paused:              # LedFx only offers a toggle
+        if current != paused:  # LedFx only offers a toggle
             await self._ledfx_send("PUT", "/api/virtuals")
         return {"paused": paused}
 
@@ -201,27 +253,38 @@ class Lights:
         current = effect or virtual["effect"]
         level = brightness if brightness is not None else virtual["brightness"]
         if effect is not None:
-            await self._ledfx_send("POST", base + "/effects",
-                                   {"type": effect, "config": {} if level is None else {"brightness": level}})
+            await self._ledfx_send(
+                "POST",
+                base + "/effects",
+                {"type": effect, "config": {} if level is None else {"brightness": level}},
+            )
         if color is not None:
             keys = (self.schema or {}).get(current, {}).get("keys", set())
             if "color" in keys:
-                await self._ledfx_send("PUT", base + "/effects", {"type": current, "config": {"color": color}})
+                await self._ledfx_send(
+                    "PUT", base + "/effects", {"type": current, "config": {"color": color}}
+                )
             elif "gradient" in keys:
                 solid = f"linear-gradient(90deg, {color} 0.00%, {color} 100.00%)"
-                await self._ledfx_send("PUT", base + "/effects", {"type": current, "config": {"gradient": solid}})
+                await self._ledfx_send(
+                    "PUT", base + "/effects", {"type": current, "config": {"gradient": solid}}
+                )
             else:
                 config = {"color": color, **({} if level is None else {"brightness": level})}
                 await self._ledfx_send("POST", base + "/effects", {"type": "singleColor", "config": config})
         if brightness is not None and effect is None:
-            await self._ledfx_send("PUT", base + "/effects", {"type": current, "config": {"brightness": brightness}})
+            await self._ledfx_send(
+                "PUT", base + "/effects", {"type": current, "config": {"brightness": brightness}}
+            )
         if on is not None:
             await self._ledfx_send("PUT", base, {"active": on})
         return {"virtual": virtual["id"]}
 
     async def _ledfx_scene(self, request):
         section = self._section("ledfx", "LedFx")
-        if request.get("scene") not in {s["id"] for s in section["scenes"]} or not isinstance(request.get("active"), bool):
+        if request.get("scene") not in {s["id"] for s in section["scenes"]} or not isinstance(
+            request.get("active"), bool
+        ):
             raise BridgeError("invalid_request", "A known scene and active true or false are required")
         action = "activate" if request["active"] else "deactivate"
         await self._ledfx_send("PUT", "/api/scenes", {"id": request["scene"], "action": action})
@@ -241,21 +304,30 @@ class Lights:
             raise BridgeError("invalid_request", "Unknown HyperHDR effect")
         if brightness is not None and not _number(brightness, 0, 1):
             raise BridgeError("invalid_request", "brightness must be between 0 and 1")
-        if color is not None and not (isinstance(color, list) and len(color) == 3
-                                      and all(isinstance(c, int) and not isinstance(c, bool) and 0 <= c <= 255
-                                              for c in color)):
+        if color is not None and not (
+            isinstance(color, list)
+            and len(color) == 3
+            and all(isinstance(c, int) and not isinstance(c, bool) and 0 <= c <= 255 for c in color)
+        ):
             raise BridgeError("invalid_request", "color must be [r, g, b] from 0 to 255")
         messages = []
         if on is not None:
-            messages.append({"command": "instance", "subcommand": "startInstance" if on else "stopInstance",
-                             "instance": instance})
+            messages.append(
+                {
+                    "command": "instance",
+                    "subcommand": "startInstance" if on else "stopInstance",
+                    "instance": instance,
+                }
+            )
         steps = []
         if color is not None:
             steps.append({"command": "color", "color": color, "priority": PRIORITY, "origin": ORIGIN})
         if effect == VIDEO:
             steps.append({"command": "clear", "priority": PRIORITY})
         elif effect is not None:
-            steps.append({"command": "effect", "effect": {"name": effect}, "priority": PRIORITY, "origin": ORIGIN})
+            steps.append(
+                {"command": "effect", "effect": {"name": effect}, "priority": PRIORITY, "origin": ORIGIN}
+            )
         if brightness is not None:
             steps.append({"command": "adjustment", "adjustment": {"scaleOutput": brightness}})
         if steps:
