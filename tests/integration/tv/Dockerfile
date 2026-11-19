@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/* \
  && systemctl mask getty@tty1.service systemd-networkd-wait-online.service
 RUN userdel -r ubuntu 2>/dev/null; useradd -m -u 1000 -s /bin/bash tv \
+ && (getent group render >/dev/null || groupadd -r render) && usermod -aG video,render tv \
  && mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/tv
 COPY session.sh /usr/local/bin/tv-session
 COPY tv-session.service /etc/systemd/user/tv-session.service
