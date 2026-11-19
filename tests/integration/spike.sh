@@ -23,7 +23,9 @@ dump() {
     echo "== diagnostics"
     docker exec "$name" systemctl --no-pager --failed || true
     docker exec "$name" journalctl --no-pager -n 60 || true
-    as_tv 'systemctl --user --no-pager status tv-session bigscreen-bridge; journalctl --user --no-pager -n 150' || true
+    as_tv 'systemctl --user --no-pager status tv-session bigscreen-bridge couchside' || true
+    as_tv 'echo "-- kwin"; tail -n 80 /run/user/1000/kwin.log' || true
+    as_tv 'journalctl --user --no-pager -n 40 -u bigscreen-bridge; journalctl --user --no-pager -n 60 -u couchside' || true
 }
 cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; }
 trap 'status=$?; [ "$status" -eq 0 ] || dump; cleanup' EXIT
@@ -34,8 +36,15 @@ sh "$here/build-release.sh" /opt/release >/dev/null
 
 step "start the TV"
 cleanup
+# Flatpak downloads persist in $FLATPAK_CACHE between runs (the workflow caches it), so
+# GitHub Pages' rate limit only matters the first time.
+cache=${FLATPAK_CACHE:-$(pwd)/.flatpak-cache}
+mkdir -p "$cache"
 docker run -d --name "$name" --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-    --tmpfs /run --tmpfs /run/lock -v "$(pwd)/dist:/opt/release:ro" "$image" >/dev/null
+    --tmpfs /run --tmpfs /run/lock -v "$(pwd)/dist:/opt/release:ro" \
+    -v "$cache:/home/tv/.local/share/flatpak" "$image" >/dev/null
+docker exec "$name" chown tv:tv /home/tv/.local /home/tv/.local/share
+docker exec "$name" chown -R tv:tv /home/tv/.local/share/flatpak
 wait_for 120 "user session bus" 'busctl --user status >/dev/null'
 wait_for 180 "KWin and the Bigscreen shell" \
     "test -e /run/user/1000/tv-ready || { systemctl --user is-failed -q tv-session && exit 0; false; }"
@@ -55,6 +64,7 @@ as_tv 'flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/
 # (503, 429). Flatpak keeps what it already fetched, so back off and continue.
 delay=30
 for attempt in 1 2 3 4 5 6; do
+    as_tv 'flatpak info --user io.github.shreyasajj.Couchside >/dev/null 2>&1' && { echo "Couchside cached"; break; }
     as_tv 'flatpak install --user -y --noninteractive https://shreyasajj.github.io/couchside/couchside.flatpakref' && break
     [ "$attempt" -lt 6 ] || exit 1
     echo "Couchside download failed (attempt $attempt); retrying in ${delay}s"; sleep "$delay"
