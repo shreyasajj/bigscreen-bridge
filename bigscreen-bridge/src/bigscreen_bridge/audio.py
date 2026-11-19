@@ -1,9 +1,9 @@
 """Local PipeWire/PulseAudio observation and explicit system audio commands."""
 import json
 import math
-from pathlib import Path
 import re
 import shutil
+from pathlib import Path
 
 from .adapters import APPS, BridgeError
 from .runtime_io import run

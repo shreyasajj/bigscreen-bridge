@@ -9,16 +9,15 @@ import asyncio
 import contextlib
 import json
 import os
-from pathlib import Path
 import re
 import stat
 import uuid
+from pathlib import Path
 
 from dbus_next import Message, MessageType
 
 from .adapters import BridgeError
 from .diagnostics import NULL
-
 
 BROWSE_PATH = re.compile(r"[a-z_]{1,32}")
 

@@ -3,8 +3,8 @@
 import asyncio
 import json
 import os
-from pathlib import Path
 import uuid
+from pathlib import Path
 
 from dbus_next import Message, MessageType
 from dbus_next.aio import MessageBus

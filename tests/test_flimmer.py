@@ -3,13 +3,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from dbus_next import MessageType
-from homeassistant.components.media_player import MediaPlayerEntityFeature, MediaPlayerState
-from homeassistant.exceptions import HomeAssistantError
-
 from bigscreen_bridge.adapters import APPS, BridgeError
 from bigscreen_bridge.flimmer import FlimmerHook, validate_channel, validate_page
 from custom_components.bigscreen_bridge.media_player import BigscreenPlayer
+from dbus_next import MessageType
+from homeassistant.components.media_player import MediaPlayerEntityFeature, MediaPlayerState
+from homeassistant.exceptions import HomeAssistantError
 
 CHANNEL = "channel-" + "a" * 64
 

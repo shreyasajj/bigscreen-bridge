@@ -4,13 +4,13 @@ import argparse
 import asyncio
 import json
 import os
-from pathlib import Path
 import signal
 import uuid
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
 from aiohttp import ClientSession
 from dbus_next.aio import MessageBus
-from importlib.util import module_from_spec, spec_from_file_location
 
 ipc_spec = spec_from_file_location("smoke_couchside_ipc", Path(__file__).with_name("smoke-couchside.py"))
 ipc = module_from_spec(ipc_spec)

@@ -4,16 +4,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from dbus_next import MessageType
-from homeassistant.components.media_player import MediaPlayerEntityFeature, MediaPlayerState
-from homeassistant.exceptions import HomeAssistantError
-
 from bigscreen_bridge.adapters import APPS, BridgeError
 from bigscreen_bridge.flimmer import FlimmerHook
 from bigscreen_bridge.server import ADAPTERS
 from bigscreen_bridge.sessions import SessionController
 from bigscreen_bridge.stremio import BUS_NAME, OBJECT_PATH, StremioHook
 from custom_components.bigscreen_bridge.media_player import BigscreenPlayer
+from dbus_next import MessageType
+from homeassistant.components.media_player import MediaPlayerEntityFeature, MediaPlayerState
+from homeassistant.exceptions import HomeAssistantError
 
 
 def signal(**fields):

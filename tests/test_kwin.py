@@ -2,9 +2,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from dbus_next import MessageType
-
 from bigscreen_bridge.kwin import KWin
+from dbus_next import MessageType
 
 
 class Bus:

@@ -1,43 +1,47 @@
 """Authenticated local bridge for KDE app lifecycle and verified media controls."""
 import argparse
 import asyncio
-from collections import OrderedDict
 import contextlib
-import getpass
 import copy
-from datetime import datetime
-from dataclasses import dataclass
+import getpass
 import hmac
 import json
 import logging
-from pathlib import Path
-import socket
 import signal
+import socket
+from collections import OrderedDict
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 
 from aiohttp import web
 from dbus_next import BusType
 from dbus_next.aio import MessageBus
 
+from .adapters import APPS, BridgeError
 from .audio import AudioManager
-from .lights import COMMANDS as LIGHT_COMMANDS, Lights
-from .mpris import MprisRegistry
-from .power import PowerManager
-from .sessions import SessionController
-
 from .config import load_config
+from .couchside import KINDS, CouchsideHook, validate_content
+from .deep_links import parse_uri
 from .diagnostics import Recorder, close_reason
 from .discovery import advertise
-from .pairing import Pairing
-from .mqtt import MqttLink, settings as mqtt_settings
-from .deep_links import parse_uri
-from .adapters import APPS, BridgeError
-from .kwin import KWin
-from .status import PATH as STATUS_PATH, PairingInterface, StatusInterface, StatusSignal
-from .couchside import CouchsideHook, KINDS, validate_content
-from .vacuumtube import VacuumTubeHook, validate_content as validate_youtube, validate_volume
 from .flimmer import FlimmerHook, validate_channel
 from .hooks import validate_page
-from .stremio import StremioHook, validate_content as validate_stremio, validate_seek
+from .kwin import KWin
+from .lights import COMMANDS as LIGHT_COMMANDS
+from .lights import Lights
+from .mpris import MprisRegistry
+from .mqtt import MqttLink
+from .mqtt import settings as mqtt_settings
+from .pairing import Pairing
+from .power import PowerManager
+from .sessions import SessionController
+from .status import PATH as STATUS_PATH
+from .status import PairingInterface, StatusInterface, StatusSignal
+from .stremio import StremioHook, validate_seek
+from .stremio import validate_content as validate_stremio
+from .vacuumtube import VacuumTubeHook, validate_volume
+from .vacuumtube import validate_content as validate_youtube
 
 LOG = logging.getLogger(__name__)
 
@@ -444,7 +448,7 @@ class Bridge:
                 else:
                     result = await hook.browse(path, offset, limit)
                     kinds = [item["content_type"] for item in result["items"]]
-                for item, kind in zip(result["items"], kinds):
+                for item, kind in zip(result["items"], kinds, strict=True):
                     # The typed ID a client passes straight back to `open`.
                     item["media_content_type"] = adapter.prefix + kind if kind else None
                 return result

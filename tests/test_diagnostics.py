@@ -1,18 +1,18 @@
 """The bridge's own diagnostics: what sets each field, bounds, privacy and how it is exposed."""
 import asyncio
-from collections import OrderedDict
-from datetime import datetime, timedelta, timezone
 import json
 import logging
+from collections import OrderedDict
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-
-from bigscreen_bridge import diagnostics as diag_module, discovery
+from bigscreen_bridge import diagnostics as diag_module
+from bigscreen_bridge import discovery
 from bigscreen_bridge.adapters import APPS, BridgeError
 from bigscreen_bridge.couchside import CouchsideHook
-from bigscreen_bridge.diagnostics import (COMMAND_LIMIT, WARNING_LIMIT, Recorder, close_reason, utc)
+from bigscreen_bridge.diagnostics import COMMAND_LIMIT, WARNING_LIMIT, Recorder, close_reason, utc
 from bigscreen_bridge.flimmer import FlimmerHook
 from bigscreen_bridge.kwin import Receiver
 from bigscreen_bridge.mqtt import MqttLink, settings

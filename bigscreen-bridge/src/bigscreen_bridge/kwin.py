@@ -2,9 +2,9 @@
 import asyncio
 import json
 import logging
-from pathlib import Path
 import tempfile
 import uuid
+from pathlib import Path
 
 from dbus_next import Message, MessageType
 from dbus_next.aio import MessageBus
@@ -12,7 +12,6 @@ from dbus_next.constants import NameFlag, RequestNameReply
 from dbus_next.service import ServiceInterface, method
 
 from .adapters import BridgeError
-
 from .diagnostics import NULL
 
 LOG = logging.getLogger(__name__)

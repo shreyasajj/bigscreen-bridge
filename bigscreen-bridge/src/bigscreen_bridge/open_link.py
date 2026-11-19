@@ -2,11 +2,11 @@
 import argparse
 import asyncio
 import json
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import uuid
+from pathlib import Path
 
 import aiohttp
 from yarl import URL

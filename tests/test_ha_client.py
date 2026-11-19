@@ -9,8 +9,8 @@ import importlib.util
 from pathlib import Path
 
 import aiohttp
-from aiohttp import web
 import pytest
+from aiohttp import web
 
 spec = importlib.util.spec_from_file_location(
     "ha_client_under_test",

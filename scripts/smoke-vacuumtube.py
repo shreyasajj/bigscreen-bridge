@@ -3,9 +3,9 @@
 import asyncio
 import json
 import os
-from pathlib import Path
 import signal
 import uuid
+from pathlib import Path
 
 APP = 'rocks.shy.VacuumTube'
 SOCKET = Path(os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}'))/'bigscreen-bridge/vacuumtube.sock'
@@ -117,7 +117,7 @@ async def main():
     for command, expected in [('pause', 'paused'), ('play', 'playing')]:
         result = await request(command)
         assert result['ok'], result
-        await wait_for(lambda s: s['media']['state'] == expected)
+        await wait_for(lambda s, expected=expected: s['media']['state'] == expected)
         print('PASS real Leanback player command:', command)
     result = await request('seek', position=12)
     assert result['ok'], result

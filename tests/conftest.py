@@ -1,12 +1,10 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
 import os
-from pathlib import Path
 import sys
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
-
-
 from bigscreen_bridge.adapters import APPS
 from bigscreen_bridge.diagnostics import Recorder
 from bigscreen_bridge.server import Bridge, application
@@ -51,7 +49,7 @@ class Clock:
     """Wall clock and monotonic clock that only move when told to."""
 
     def __init__(self):
-        self.wall = datetime(2026, 11, 17, 16, 42, 0, 123456, tzinfo=timezone.utc)
+        self.wall = datetime(2026, 11, 17, 16, 42, 0, 123456, tzinfo=UTC)
         self.mono = 1000.0
 
     def __call__(self):

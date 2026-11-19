@@ -5,10 +5,9 @@ from unittest.mock import Mock
 
 import aiohttp
 import pytest
+from custom_components.bigscreen_bridge.coordinator import BridgeCoordinator
 from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.core import HomeAssistant
-
-from custom_components.bigscreen_bridge.coordinator import BridgeCoordinator
 
 
 @pytest.fixture

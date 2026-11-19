@@ -3,7 +3,7 @@ import asyncio
 import re
 
 from .adapters import BridgeError
-from .hooks import DBusHook, validate_page  # noqa: F401  (re-exported for callers)
+from .hooks import DBusHook, validate_page
 
 BUS_NAME = "io.github.jclsn.Flimmer.Control"
 OBJECT_PATH = "/io/github/jclsn/Flimmer/Control"

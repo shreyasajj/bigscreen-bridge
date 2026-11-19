@@ -6,12 +6,12 @@
   release_version.py stamp X.Y.Z --pyproject P                       write the version into pyproject.toml
 """
 import argparse
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bigscreen-bridge" / "src"))
-from bigscreen_bridge.update import parse_version  # noqa: E402
+from bigscreen_bridge.update import parse_version
 
 PROJECT_VERSION = re.compile(r'^version = "([^"]*)"$', re.MULTILINE)
 
@@ -36,7 +36,8 @@ def next_prerelease(tags, project):
             raise SystemExit(f"Project version {project!r} is not X.Y.Z")
         base = parsed[:3]
     taken = [v[4] for v in versions if v[:3] == base and v[3] == 0]
-    return "%d.%d.%drc%d" % (*base, max(taken, default=0) + 1)
+    major, minor, patch = base
+    return f"{major}.{minor}.{patch}rc{max(taken, default=0) + 1}"
 
 
 def main(argv=None):

@@ -4,7 +4,6 @@ from pathlib import Path
 
 import aiohttp
 import pytest
-
 from bigscreen_bridge.adapters import APPS, BridgeError
 
 # Load the transport client without importing Home Assistant's integration package.

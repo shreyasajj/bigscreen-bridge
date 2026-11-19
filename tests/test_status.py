@@ -5,7 +5,6 @@ from unittest.mock import Mock
 
 from bigscreen_bridge.mqtt import MqttLink, settings
 from bigscreen_bridge.status import INTERFACE, StatusInterface, StatusSignal
-
 from test_diagnostics import AUTH, Broker, wire
 
 

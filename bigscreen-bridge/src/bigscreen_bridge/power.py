@@ -1,9 +1,9 @@
 """Observed KDE display and authorized logind operations, kept distinct from TV CEC."""
 import asyncio
-from pathlib import Path
 import re
 import shutil
 import time
+from pathlib import Path
 
 from dbus_next import MessageType
 

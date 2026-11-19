@@ -5,7 +5,6 @@ import os
 import stat
 
 import pytest
-
 from bigscreen_bridge.adapters import BridgeError
 from bigscreen_bridge.pairing import ALPHABET, LIFETIME, MAX_FAILURES, Pairing, normalize
 from bigscreen_bridge.status import PAIRING_INTERFACE, PairingInterface

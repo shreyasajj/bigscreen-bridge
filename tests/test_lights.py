@@ -4,9 +4,9 @@ import json
 
 import pytest
 from aiohttp import web
-
 from bigscreen_bridge.adapters import BridgeError
 from bigscreen_bridge.lights import COMMANDS, Lights
+
 
 def answer(body):
     """An async aiohttp handler returning `body()` as JSON."""
@@ -34,7 +34,7 @@ class FakeLedFx:
     def app(self):
         app = web.Application()
         app.router.add_get("/api/info", answer(lambda: {"version": "2.1.9"}))
-        app.router.add_get("/api/virtuals", answer(lambda: 
+        app.router.add_get("/api/virtuals", answer(lambda:
             {"status": "success", "paused": self.paused, "virtuals": self.virtuals}))
         app.router.add_put("/api/virtuals", self.toggle)
         app.router.add_get("/api/devices", answer(lambda: {"devices": {

@@ -91,7 +91,7 @@ class Lights:
             if self.schema is None:
                 effects = (await self._ledfx_get("/api/schema")).get("effects") or {}
                 self.schema = {kind: {"name": (spec.get("name") or kind),
-                                      "keys": set(((spec.get("schema") or spec).get("properties") or {}))}
+                                      "keys": set((spec.get("schema") or spec).get("properties") or {})}
                                for kind, spec in effects.items() if isinstance(spec, dict)}
         except (aiohttp.ClientError, TimeoutError, ValueError, AttributeError):
             self.schema = None

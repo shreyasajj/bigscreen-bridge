@@ -7,14 +7,14 @@ is never modified. The TV bridge token stays in memory or the private temp confi
 import asyncio
 import json
 import logging
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from pathlib import Path
 
 from homeassistant import bootstrap, loader
-from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.json import json_bytes
 

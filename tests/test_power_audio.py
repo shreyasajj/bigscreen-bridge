@@ -1,11 +1,10 @@
 from types import SimpleNamespace
 
-from dbus_next import MessageType, Variant
 import pytest
-
 from bigscreen_bridge.adapters import BridgeError
 from bigscreen_bridge.audio import AudioManager, parse_streams, parse_volume
 from bigscreen_bridge.power import PowerManager, blocked_inhibitors, parse_dpms
+from dbus_next import MessageType, Variant
 
 
 class Bus:

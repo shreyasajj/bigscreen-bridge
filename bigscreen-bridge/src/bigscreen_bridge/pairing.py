@@ -11,17 +11,17 @@ code is kept available all the time; afterwards one is made only on request
 tokens never reach logs, diagnostics, WebSocket replies other than `/pair`, or MQTT.
 """
 import asyncio
-from collections import deque
 import hashlib
 import hmac
 import json
 import logging
 import os
-from pathlib import Path
 import re
 import secrets
 import time
-from datetime import datetime, timezone
+from collections import deque
+from datetime import UTC, datetime
+from pathlib import Path
 
 from .adapters import BridgeError
 from .diagnostics import utc
@@ -152,7 +152,7 @@ class Pairing:
             return None
         return {"code": self.code[:4] + "-" + self.code[4:], "reason": self.reason,
                 "expires_at": utc(datetime.fromtimestamp(self.clock() + max(0.0, self.expires - self.monotonic()),
-                                                         timezone.utc))}
+                                                         UTC))}
 
     def summary(self):
         self._reload()
@@ -192,7 +192,7 @@ class Pairing:
         if len(self.clients) >= MAX_CLIENTS:
             raise BridgeError("too_many_clients", "Too many paired clients")
         token = secrets.token_urlsafe(32)
-        at = utc(datetime.fromtimestamp(self.clock(), timezone.utc))
+        at = utc(datetime.fromtimestamp(self.clock(), UTC))
         self.clients.append({"id": secrets.token_hex(8), "name": name, "hash": digest(token), "created_at": at})
         self._save()
         self.last_paired = {"name": name, "at": at}

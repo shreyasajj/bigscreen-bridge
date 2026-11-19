@@ -9,14 +9,14 @@ Never recorded: the token, MQTT credentials, content IDs, URIs, search text,
 volume levels, window captions or app payloads. Error messages are the bridge's own
 fixed strings; text an application sent back is replaced by a fixed one.
 """
-from collections import OrderedDict, deque
 import functools
 import importlib.metadata
 import logging
 import os
 import re
 import time
-from datetime import datetime, timezone
+from collections import OrderedDict, deque
+from datetime import UTC, datetime
 
 from .adapters import APPS
 
@@ -41,7 +41,7 @@ PLAIN = re.compile(r"[^\x00-\x1f\x7f]*")
 
 def utc(moment):
     """UTC ISO 8601 with milliseconds and a Z suffix, like `media.updated_at`."""
-    return moment.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return moment.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def package_version():
@@ -115,7 +115,7 @@ class WarningBuffer(logging.Handler):
             row = self.rows.pop(key, None) or {"at": None, "level": record.levelname, "logger": record.name,
                                                "message": message, "count": 0}
             row["count"] += 1
-            row["at"] = utc(datetime.fromtimestamp(record.created, timezone.utc))
+            row["at"] = utc(datetime.fromtimestamp(record.created, UTC))
             self.rows[key] = row
             while len(self.rows) > self.limit:
                 self.rows.popitem(last=False)
@@ -126,7 +126,7 @@ class WarningBuffer(logging.Handler):
 
 class Recorder:
     def __init__(self, clock=None, monotonic=time.monotonic):
-        self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.clock = clock or (lambda: datetime.now(UTC))
         self.monotonic = monotonic
         self.listeners = []
         self.secrets = set()

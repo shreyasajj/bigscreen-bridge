@@ -1,8 +1,8 @@
 """Load a user-private service configuration without exposing its bearer token."""
 import json
 import os
-from pathlib import Path
 import stat
+from pathlib import Path
 
 
 def load_config(path):

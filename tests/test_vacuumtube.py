@@ -7,12 +7,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from homeassistant.components.media_player import MediaPlayerEntityFeature
-from homeassistant.exceptions import HomeAssistantError
-
 from bigscreen_bridge.adapters import APPS, BridgeError
 from bigscreen_bridge.vacuumtube import VacuumTubeHook, validate_content
 from custom_components.bigscreen_bridge.media_player import BigscreenPlayer
+from homeassistant.components.media_player import MediaPlayerEntityFeature
+from homeassistant.exceptions import HomeAssistantError
 
 VIDEO = 'M7lc1UVf-VE'
 

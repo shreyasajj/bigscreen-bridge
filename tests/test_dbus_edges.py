@@ -6,19 +6,18 @@ player changes its PlaybackStatus when told to Play or Pause.
 """
 import asyncio
 import json
-from pathlib import Path
 import re
+from pathlib import Path
 from types import SimpleNamespace
 
-from dbus_next import Message, MessageType, Variant
-from dbus_next.constants import RequestNameReply
 import pytest
-
 from bigscreen_bridge import kwin as kwin_module
 from bigscreen_bridge import runtime_io
 from bigscreen_bridge.adapters import BridgeError
 from bigscreen_bridge.kwin import KWin, Receiver
 from bigscreen_bridge.mpris import MprisRegistry, media_state
+from dbus_next import Message, MessageType, Variant
+from dbus_next.constants import RequestNameReply
 
 WINDOWS = [{"id": "w1", "desktop": "io.github.shreyasajj.StremioTV", "active": False},
            {"id": "w2", "desktop": "io.github.shreyasajj.Couchside", "active": True}]

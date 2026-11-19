@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-
 from custom_components.bigscreen_bridge.config_flow import ConfigFlow
 
 DEAD = "http://127.0.0.1:9"    # nothing listens on the discard port

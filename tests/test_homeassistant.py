@@ -4,13 +4,13 @@ from unittest.mock import AsyncMock, Mock
 
 import aiohttp
 import pytest
+from custom_components.bigscreen_bridge.media_player import BigscreenPlayer
+from ha_helpers import MUSIC, RecordingLights, by_key, music_assistant
 from homeassistant.components.media_player import MediaPlayerEntityFeature, MediaPlayerState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from custom_components.bigscreen_bridge.media_player import BigscreenPlayer
-from ha_helpers import MUSIC, RecordingLights, by_key, music_assistant
 
 async def test_native_player_browse_sources_and_unsupported_features(coordinator, bridge):
     b, _ = bridge
@@ -67,6 +67,7 @@ async def test_command_error_translates_to_ha_error(coordinator):
 @pytest.mark.parametrize("token,error", [("wrong", "invalid_auth"), ("a" * 48, None)])
 async def test_config_flow_checks_live_bridge_identity(coordinator, token, error):
     from unittest.mock import AsyncMock
+
     from custom_components.bigscreen_bridge.config_flow import ConfigFlow
     flow = ConfigFlow()
     flow.hass = coordinator.hass
@@ -84,8 +85,8 @@ async def test_config_flow_checks_live_bridge_identity(coordinator, token, error
 
 
 async def test_config_flow_pairs_with_the_code_shown_on_the_tv(coordinator, bridge, tmp_path):
-    from custom_components.bigscreen_bridge.config_flow import ConfigFlow
     from bigscreen_bridge.pairing import Pairing
+    from custom_components.bigscreen_bridge.config_flow import ConfigFlow
     b, _ = bridge
     b.pairing = Pairing(tmp_path / "clients.json")
     shown = b.status()["pairing"]["code"]
@@ -305,6 +306,7 @@ async def test_downloaded_diagnostics_never_hold_the_token(coordinator, bridge, 
 
 def config_entry(http, token="a" * 48):
     from types import MappingProxyType
+
     from homeassistant.config_entries import ConfigEntry, ConfigEntryState
     entry = ConfigEntry(data={"url": str(http.make_url("")), "token": token}, discovery_keys=MappingProxyType({}),
                         domain="bigscreen_bridge", minor_version=1, options={}, source="user",

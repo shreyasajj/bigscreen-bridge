@@ -2,7 +2,6 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-
 from bigscreen_bridge.adapters import BridgeError
 from bigscreen_bridge.mpris import MprisRegistry
 from bigscreen_bridge.sessions import SessionController

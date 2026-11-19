@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """Real TV player test using a synthetic local IPTV feed and a separate profile."""
 import asyncio
-from datetime import datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
-import uuid
-
-import aiohttp
-from pathlib import Path
 import signal
 import subprocess
 import tempfile
 import threading
+import uuid
+from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+import aiohttp
 
 spec = importlib.util.spec_from_file_location('smoke_flimmer', Path(__file__).with_name('smoke-flimmer.py'))
 smoke = importlib.util.module_from_spec(spec)
@@ -61,7 +61,7 @@ async def main():
                     f'#EXTINF:-1 tvg-id="fixture-{i}" tvg-chno="{i + 1}",Bridge test {i + 1}\n'
                     f'http://127.0.0.1:{self.server.server_port}/stream.ts\n' for i in range(55))
             elif self.path == '/guide.xml':
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 def stamp(value):
                     return value.strftime('%Y%m%d%H%M%S +0000')
                 programmes = ''.join(

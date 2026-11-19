@@ -5,15 +5,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-
 from bigscreen_bridge import discovery
 from bigscreen_bridge.adapters import BridgeError
 from bigscreen_bridge.couchside import CouchsideHook
 from bigscreen_bridge.mqtt import MqttLink, settings
 from bigscreen_bridge.stremio import StremioHook
-from homeassistant.components.media_player import MediaPlayerEntityFeature
-
 from custom_components.bigscreen_bridge.media_player import BigscreenPlayer
+from homeassistant.components.media_player import MediaPlayerEntityFeature
 
 ALBUM = "library://album/12"
 

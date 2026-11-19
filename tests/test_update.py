@@ -5,8 +5,14 @@ import json
 import tarfile
 
 import pytest
-
-from bigscreen_bridge.update import UpdateError, is_playing, parse_version, pick_release, run, verify_and_extract
+from bigscreen_bridge.update import (
+    UpdateError,
+    is_playing,
+    parse_version,
+    pick_release,
+    run,
+    verify_and_extract,
+)
 
 STABLE = {"tag_name": "v0.3.1", "prerelease": False, "draft": False}
 

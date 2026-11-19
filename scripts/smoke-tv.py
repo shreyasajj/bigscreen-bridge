@@ -2,10 +2,10 @@
 """Run on the TV using the bridge venv. Never print the pairing token."""
 import argparse
 import asyncio
-from collections import Counter
 import json
-from pathlib import Path
 import uuid
+from collections import Counter
+from pathlib import Path
 
 import aiohttp
 

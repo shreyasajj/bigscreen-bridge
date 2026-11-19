@@ -11,15 +11,13 @@ import tarfile
 import threading
 from types import SimpleNamespace
 
-from dbus_next import MessageType, Variant
 import pytest
-
 from bigscreen_bridge import audio as audio_module
 from bigscreen_bridge import open_link, server, update
 from bigscreen_bridge.adapters import BridgeError
 from bigscreen_bridge.audio import AudioManager, identify_app, parse_streams, parse_volume, process_app_id
 from bigscreen_bridge.power import PowerManager, blocked_inhibitors, network_inventory, parse_dpms
-
+from dbus_next import MessageType, Variant
 
 # --- audio ------------------------------------------------------------------------------
 

@@ -6,9 +6,9 @@ must never be edited by hand. Run from anywhere: `python3 scripts/export-patches
 Pass --check to fail when a committed patch no longer matches its branch.
 """
 import json
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 

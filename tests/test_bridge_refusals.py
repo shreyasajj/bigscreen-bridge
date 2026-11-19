@@ -9,7 +9,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-
 from bigscreen_bridge import server
 from bigscreen_bridge.adapters import APPS, BridgeError
 from bigscreen_bridge.couchside import CouchsideHook

@@ -14,7 +14,6 @@ import hashlib
 import importlib.metadata
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -23,6 +22,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 REPO = "shreyasajj/bigscreen-bridge"
 RELEASES = f"https://api.github.com/repos/{REPO}/releases?per_page=30"

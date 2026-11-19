@@ -11,12 +11,12 @@ from Stremio TV's own MQTT link. Anyone allowed to publish on the broker can sen
 commands, so command handling is opt-in and the broker is the trust boundary.
 """
 import asyncio
-from collections import OrderedDict
 import contextlib
 import json
 import logging
 import re
 import ssl
+from collections import OrderedDict
 
 from .diagnostics import NULL
 

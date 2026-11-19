@@ -64,7 +64,6 @@ jobs:
         if: always()
         run: |
           { echo '### Coverage, Python 3.12 (bridge tests only)'; echo '```'; coverage report; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - run: ruff check bigscreen-bridge tests scripts
       - name: Installer test
         run: sh tests/test_install.sh
 
@@ -94,7 +93,21 @@ jobs:
         run: |
           { echo '### Coverage, Python 3.14 (bridge and Home Assistant)'; echo '```'; coverage report; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
+  lint:
+    # Required to merge into main. Ruff is pinned so a new release can't turn the
+    # check red on its own.
+    name: Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install ruff==0.17.5
+      - run: ruff check --output-format github bigscreen-bridge tests scripts
+
   shellcheck:
+    # Required to merge into main.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

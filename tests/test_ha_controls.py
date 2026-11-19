@@ -13,12 +13,11 @@ import copy
 import json
 
 import pytest
-from homeassistant.components.media_player import MediaPlayerEntityFeature as F
-from homeassistant.exceptions import HomeAssistantError
-
 from bigscreen_bridge.adapters import BridgeError
 from custom_components.bigscreen_bridge.media_player import BigscreenPlayer
 from ha_helpers import RecordingLights, by_key, music_assistant
+from homeassistant.components.media_player import MediaPlayerEntityFeature as F
+from homeassistant.exceptions import HomeAssistantError
 
 MEDIA = {"state": "playing", "title": "Test title", "position": 10, "duration": 100}
 SNAPSHOT = {
@@ -450,6 +449,7 @@ async def test_each_platform_adds_its_entities(wired, bridge, platform, expected
 
 async def test_app_players_only_for_installed_apps(wired):
     from types import SimpleNamespace
+
     from custom_components.bigscreen_bridge import media_player
     coordinator, _ = wired
     for app in coordinator.data["apps"]:

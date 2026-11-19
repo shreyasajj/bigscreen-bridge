@@ -6,7 +6,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from bigscreen_bridge.adapters import BridgeError
 from bigscreen_bridge.couchside import CouchsideHook
 from bigscreen_bridge.diagnostics import Recorder

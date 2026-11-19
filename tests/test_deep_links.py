@@ -3,7 +3,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-
 from bigscreen_bridge.adapters import APPS, BridgeError
 from bigscreen_bridge.config import load_config
 from bigscreen_bridge.deep_links import parse_uri

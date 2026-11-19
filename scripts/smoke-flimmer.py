@@ -4,9 +4,9 @@ import argparse
 import asyncio
 import json
 import os
-from pathlib import Path
 import signal
 import uuid
+from pathlib import Path
 
 import aiohttp
 from dbus_next import Message, MessageType
