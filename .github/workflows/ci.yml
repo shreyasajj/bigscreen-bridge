@@ -133,6 +133,7 @@ jobs:
           cache-from: type=gha,scope=plasma
           cache-to: type=gha,scope=plasma,mode=max
       - name: Status test image
-        run: docker build --progress=plain -t bigscreen-status-test bigscreen-status/tests
+        # The default builder sees the image loaded above; the buildx one would not.
+        run: docker buildx build --builder default --progress=plain -t bigscreen-status-test bigscreen-status/tests
       - name: Press every key against a stand-in bridge
         run: docker run --rm -v "$PWD/bigscreen-status:/status:ro" bigscreen-status-test
