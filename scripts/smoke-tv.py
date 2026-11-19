@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run on the TV using the bridge venv. Never print the pairing token."""
+
 import argparse
 import asyncio
 import json
@@ -11,8 +12,9 @@ import aiohttp
 
 
 async def process_ids():
-    proc = await asyncio.create_subprocess_exec("flatpak", "ps", "--columns=application",
-                                               stdout=asyncio.subprocess.PIPE)
+    proc = await asyncio.create_subprocess_exec(
+        "flatpak", "ps", "--columns=application", stdout=asyncio.subprocess.PIPE
+    )
     out, _ = await proc.communicate()
     return Counter(out.decode().splitlines())
 
@@ -23,7 +25,9 @@ async def main(focus):
     async with aiohttp.ClientSession() as session:
         async with session.get(url + "/ws") as response:
             assert response.status == 401
-        async with session.ws_connect(url + "/ws", headers={"Authorization": "Bearer " + config["token"]}) as ws:
+        async with session.ws_connect(
+            url + "/ws", headers={"Authorization": "Bearer " + config["token"]}
+        ) as ws:
             initial = await ws.receive_json()
             assert initial["protocol"] == 1
             print(json.dumps({"active_app": initial["active_app"], "apps": initial["apps"]}))
@@ -61,6 +65,8 @@ async def main(focus):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--focus", action="store_true", help="Activate existing app windows and restore initial app")
+    parser.add_argument(
+        "--focus", action="store_true", help="Activate existing app windows and restore initial app"
+    )
     args = parser.parse_args()
     asyncio.run(main(args.focus))

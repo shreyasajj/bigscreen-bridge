@@ -5,6 +5,7 @@ The branches are the source of truth; the patch files are a reviewable export an
 must never be edited by hand. Run from anywhere: `python3 scripts/export-patches.py`.
 Pass --check to fail when a committed patch no longer matches its branch.
 """
+
 import json
 import subprocess
 import sys
@@ -18,8 +19,9 @@ def main():
     stale = []
     for name, repo in json.loads((ROOT / "config/repositories.json").read_text())["repositories"].items():
         revisions = f"{repo['base_revision']}..{repo['development_branch']}"
-        diff = subprocess.run(["git", "-C", repo["path"], "diff", "--binary", revisions],
-                              check=True, capture_output=True).stdout
+        diff = subprocess.run(
+            ["git", "-C", repo["path"], "diff", "--binary", revisions], check=True, capture_output=True
+        ).stdout
         target = ROOT / repo["patch"]
         if check:
             if target.read_bytes() != diff:

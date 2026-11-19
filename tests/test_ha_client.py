@@ -4,6 +4,7 @@ The happy paths run against the real bridge in test_bridge.py and test_homeassis
 these cover what the client does when a bridge, or something pretending to be one, does
 not answer the way the protocol says.
 """
+
 import asyncio
 import importlib.util
 from pathlib import Path
@@ -14,7 +15,8 @@ from aiohttp import web
 
 spec = importlib.util.spec_from_file_location(
     "ha_client_under_test",
-    Path(__file__).parents[2] / "ha-bigscreen-bridge/custom_components/bigscreen_bridge/client.py")
+    Path(__file__).parents[2] / "ha-bigscreen-bridge/custom_components/bigscreen_bridge/client.py",
+)
 client_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(client_module)
 BridgeClient = client_module.BridgeClient
@@ -24,9 +26,17 @@ BridgeAuthError = client_module.BridgeAuthError
 STATE = {"type": "state", "protocol": 1, "device_id": "fake-device", "apps": []}
 
 
-@pytest.mark.parametrize("typed,expected", [
-    (" 23ab cd45 ", "23ABCD45"), ("23AB-CD45", "23ABCD45"),
-    ("a" * 48, None), ("0000 0000", None), ("", None), (None, None)])
+@pytest.mark.parametrize(
+    "typed,expected",
+    [
+        (" 23ab cd45 ", "23ABCD45"),
+        ("23AB-CD45", "23ABCD45"),
+        ("a" * 48, None),
+        ("0000 0000", None),
+        ("", None),
+        (None, None),
+    ],
+)
 def test_pairing_code_normalises_and_rejects(typed, expected):
     assert client_module.pairing_code(typed) == expected
 
@@ -53,12 +63,18 @@ def reply(status, body=None, text=None):
         if text is not None:
             return web.Response(status=status, text=text)
         return web.json_response(body, status=status)
+
     return handler
 
 
-@pytest.mark.parametrize("status,error,code", [
-    (403, BridgeAuthError, "invalid_code"), (429, BridgeAuthError, "rate_limited"),
-    (500, BridgeClientError, "internal")])
+@pytest.mark.parametrize(
+    "status,error,code",
+    [
+        (403, BridgeAuthError, "invalid_code"),
+        (429, BridgeAuthError, "rate_limited"),
+        (500, BridgeClientError, "internal"),
+    ],
+)
 async def test_pair_refusals_carry_the_bridge_error(aiohttp_server, status, error, code):
     url = await stub(aiohttp_server, reply(status, {"error": {"code": code, "message": "No."}}))
     async with aiohttp.ClientSession() as session:
@@ -92,6 +108,7 @@ async def test_pair_unexpected_reply(aiohttp_server):
 
 def socket(*frames, then=None):
     """A WebSocket endpoint that sends `frames` (dicts as JSON, bytes as binary), then waits."""
+
     async def handler(request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
@@ -108,6 +125,7 @@ def socket(*frames, then=None):
             async for _ in ws:
                 pass
         return ws
+
     return handler
 
 
@@ -127,8 +145,10 @@ async def test_handshake_failure_that_is_not_auth(aiohttp_server):
     assert type(raised.value) is BridgeClientError
 
 
-@pytest.mark.parametrize("first", [dict(STATE, protocol=99), dict(STATE, type="hello"),
-                                   dict(STATE, device_id=5), dict(STATE, apps={})])
+@pytest.mark.parametrize(
+    "first",
+    [dict(STATE, protocol=99), dict(STATE, type="hello"), dict(STATE, device_id=5), dict(STATE, apps={})],
+)
 async def test_connect_unsupported_protocol_closes(aiohttp_server, first):
     url = await stub(aiohttp_server, socket(first), path="/ws", method="GET")
     async with aiohttp.ClientSession() as session:
@@ -162,7 +182,7 @@ async def test_malformed_frame_disconnects_and_fails_pending(aiohttp_server, bad
     command_seen = asyncio.Event()
 
     async def after(ws):
-        await ws.receive()          # the client's command; never answered
+        await ws.receive()  # the client's command; never answered
         command_seen.set()
         await (ws.send_bytes(bad) if isinstance(bad, bytes) else ws.send_str(bad))
         async for _ in ws:
@@ -185,12 +205,10 @@ async def test_malformed_frame_disconnects_and_fails_pending(aiohttp_server, bad
 async def test_state_pushes_reach_the_callback(aiohttp_server):
     pushed = dict(STATE, active_app="stremio")
     url = await stub(aiohttp_server, socket(STATE, pushed), path="/ws", method="GET")
-    states = []
+    pushed = asyncio.Event()
     async with aiohttp.ClientSession() as session:
-        client = BridgeClient(session, url, "a" * 48, on_state=states.append)
+        client = BridgeClient(session, url, "a" * 48, on_state=lambda _state: pushed.set())
         await client.connect()
-        async with asyncio.timeout(2):
-            while not states:
-                await asyncio.sleep(0.01)
+        await asyncio.wait_for(pushed.wait(), 2)
         assert client.state["active_app"] == "stremio"
         await client.close()

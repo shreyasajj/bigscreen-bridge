@@ -3,6 +3,7 @@
 Only the address and a stable device identity are published; pairing still needs
 the private token. Nothing is announced while the bridge listens on loopback.
 """
+
 import ipaddress
 import logging
 
@@ -29,8 +30,11 @@ def service_record(config, hostname):
     name = str(config.get("name") or hostname)[:40]
     text = {"device_id": config["device_id"], "name": name, "protocol": "1"}
     # Instance names must be unique on the link; the device ID keeps two TVs apart.
-    return {"instance": f"{name} ({config['device_id'][:8]})", "port": config.get("port", 8765),
-            "txt": [f"{key}={value}".encode() for key, value in text.items()]}
+    return {
+        "instance": f"{name} ({config['device_id'][:8]})",
+        "port": config.get("port", 8765),
+        "txt": [f"{key}={value}".encode() for key, value in text.items()],
+    }
 
 
 async def advertise(system_bus, config, hostname, recorder=NULL):
@@ -42,8 +46,15 @@ async def advertise(system_bus, config, hostname, recorder=NULL):
     try:
         group = (await call(system_bus, AVAHI, "/", AVAHI + ".Server", "EntryGroupNew"))[0]
         # interface -1 and protocol -1: every interface, IPv4 and IPv6; empty host and domain: ours.
-        await call(system_bus, AVAHI, group, AVAHI + ".EntryGroup", "AddService", "iiussssqaay",
-                   [-1, -1, 0, record["instance"], SERVICE_TYPE, "", "", record["port"], record["txt"]])
+        await call(
+            system_bus,
+            AVAHI,
+            group,
+            AVAHI + ".EntryGroup",
+            "AddService",
+            "iiussssqaay",
+            [-1, -1, 0, record["instance"], SERVICE_TYPE, "", "", record["port"], record["txt"]],
+        )
         await call(system_bus, AVAHI, group, AVAHI + ".EntryGroup", "Commit")
     except BridgeError as exc:
         recorder.discovery_result(record, SERVICE_TYPE, str(exc))

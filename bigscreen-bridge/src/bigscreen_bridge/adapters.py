@@ -1,4 +1,5 @@
 """Fixed app identities; playback hooks are negotiated separately from UI focus."""
+
 from dataclasses import dataclass
 
 
@@ -10,10 +11,10 @@ class App:
     aliases: tuple[str, ...]
 
     def matches(self, window: dict) -> bool:
-        identities = {str(window.get(k, "")).lower().removesuffix(".desktop")
-                      for k in ("desktop", "resource", "class")}
-        return bool(identities & {v.lower().removesuffix(".desktop")
-                                  for v in (self.flatpak, *self.aliases)})
+        identities = {
+            str(window.get(k, "")).lower().removesuffix(".desktop") for k in ("desktop", "resource", "class")
+        }
+        return bool(identities & {v.lower().removesuffix(".desktop") for v in (self.flatpak, *self.aliases)})
 
 
 APPS = (

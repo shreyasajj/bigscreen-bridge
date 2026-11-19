@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Release versions for .github/workflows/release.yml.
 
-  release_version.py check-tag vX.Y.Z --pyproject pyproject.toml     tag must equal the project version
-  release_version.py next-prerelease --pyproject P --tags-file F     next rc after the latest stable tag
-  release_version.py stamp X.Y.Z --pyproject P                       write the version into pyproject.toml
+release_version.py check-tag vX.Y.Z --pyproject pyproject.toml     tag must equal the project version
+release_version.py next-prerelease --pyproject P --tags-file F     next rc after the latest stable tag
+release_version.py stamp X.Y.Z --pyproject P                       write the version into pyproject.toml
 """
+
 import argparse
 import re
 import sys

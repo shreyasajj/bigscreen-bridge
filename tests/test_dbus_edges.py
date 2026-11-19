@@ -4,6 +4,7 @@ The fakes act like the real services rather than recording calls. The fake KWin 
 script it was asked to load and calls back the way that script would. The fake MPRIS
 player changes its PlaybackStatus when told to Play or Pause.
 """
+
 import asyncio
 import json
 import re
@@ -19,8 +20,10 @@ from bigscreen_bridge.mpris import MprisRegistry, media_state
 from dbus_next import Message, MessageType, Variant
 from dbus_next.constants import RequestNameReply
 
-WINDOWS = [{"id": "w1", "desktop": "io.github.shreyasajj.StremioTV", "active": False},
-           {"id": "w2", "desktop": "io.github.shreyasajj.Couchside", "active": True}]
+WINDOWS = [
+    {"id": "w1", "desktop": "io.github.shreyasajj.StremioTV", "active": False},
+    {"id": "w2", "desktop": "io.github.shreyasajj.Couchside", "active": True},
+]
 
 
 def ok(*body):
@@ -35,7 +38,9 @@ def error(name):
 def fast(monkeypatch):
     """Shrink the bridge's fixed KWin waits so timeouts are reached in milliseconds."""
     real_wait_for, real_timeout = asyncio.wait_for, asyncio.timeout
-    monkeypatch.setattr(kwin_module.asyncio, "wait_for", lambda aw, timeout: real_wait_for(aw, min(timeout, 0.05)))
+    monkeypatch.setattr(
+        kwin_module.asyncio, "wait_for", lambda aw, timeout: real_wait_for(aw, min(timeout, 0.05))
+    )
     monkeypatch.setattr(kwin_module.asyncio, "timeout", lambda delay: real_timeout(min(delay, 0.05)))
 
 
@@ -66,8 +71,10 @@ class FakeKWin:
         if destination == "org.freedesktop.DBus":
             interface = SimpleNamespace(on_name_owner_changed=self.owner_handlers.append)
         else:
+
             async def unload(name):
                 self.unloaded.append(name)
+
             interface = SimpleNamespace(call_unload_script=unload)
         return SimpleNamespace(get_interface=lambda name: interface)
 
@@ -78,7 +85,7 @@ class FakeKWin:
         self.sent.append(message.member)
         if message.member == "loadScript":
             path = Path(message.body[0])
-            self.loaded.append(path.read_text() if path.exists() else "")
+            self.loaded.append(await asyncio.to_thread(lambda: path.read_text() if path.exists() else ""))
             return self.load_reply or ok(len(self.loaded))
         if message.member == "start":
             if self.start_reply:
@@ -158,16 +165,24 @@ async def test_kwin_restarting_drops_its_windows(monkeypatch):
     manager = await started(monkeypatch, bus, lambda: changes.append(1))
     changes.clear()
     (handler,) = bus.owner_handlers
-    handler("org.kde.plasmashell", ":1.5", ":1.9")       # someone else: ignored
-    handler("org.kde.KWin", "", ":1.7")                  # KWin appearing for the first time
+    handler("org.kde.plasmashell", ":1.5", ":1.9")  # someone else: ignored
+    handler("org.kde.KWin", "", ":1.7")  # KWin appearing for the first time
     assert manager.ready.is_set() and changes == []
     handler("org.kde.KWin", ":1.7", ":1.8")
     assert not manager.ready.is_set() and manager.windows == [] and manager.lost.is_set()
     assert changes == [1]
 
 
-@pytest.mark.parametrize("payload", ["not json", "{}", json.dumps([{"desktop": "no id"}]),
-                                     json.dumps([{"id": 5}]), json.dumps([{"id": str(n)} for n in range(513)])])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not json",
+        "{}",
+        json.dumps([{"desktop": "no id"}]),
+        json.dumps([{"id": 5}]),
+        json.dumps([{"id": str(n)} for n in range(513)]),
+    ],
+)
 def test_malformed_window_reports_keep_the_last_good_list(payload):
     manager = KWin(Path("/x"))
     manager.windows = list(WINDOWS)
@@ -234,9 +249,14 @@ async def test_focus_found_but_never_shown_active(monkeypatch, fast):
         await manager.focus("w1")
 
 
-@pytest.mark.parametrize("load,start,message", [
-    (error("org.kde.Error"), None, "loadScript failed"), (ok(-1), None, "refused script"),
-    (None, error("org.kde.Error"), "start failed")])
+@pytest.mark.parametrize(
+    "load,start,message",
+    [
+        (error("org.kde.Error"), None, "loadScript failed"),
+        (ok(-1), None, "refused script"),
+        (None, error("org.kde.Error"), "start failed"),
+    ],
+)
 async def test_script_loading_errors(load, start, message):
     manager = KWin(Path("/x"))
     manager.bus = FakeKWin()
@@ -250,10 +270,11 @@ async def test_close_unloads_the_monitor_and_leaves_the_bus(monkeypatch):
     manager = await started(monkeypatch, bus)
     await manager.close()
     assert bus.unloaded[-1] == "bigscreen-bridge-monitor" and bus.disconnected
-    await KWin(Path("/x")).close()      # never started: nothing to undo
+    await KWin(Path("/x")).close()  # never started: nothing to undo
 
 
 # --- runtime_io -------------------------------------------------------------------------
+
 
 class ReplyBus:
     def __init__(self, reply=None, raises=None, delay=0):
@@ -271,11 +292,17 @@ def test_unwrap_nested_variants():
     assert runtime_io.unwrap([value, (Variant("s", "z"),)]) == [{"a": ["x", "y"], "b": 3}, ["z"]]
 
 
-@pytest.mark.parametrize("bus,code", [
-    (None, "service_unavailable"), (ReplyBus(raises=EOFError()), "service_unavailable"),
-    (ReplyBus(reply=None), "system_error"), (ReplyBus(reply=error("org.x.Failed")), "system_error"),
-    (ReplyBus(reply=error("org.freedesktop.DBus.Error.AccessDenied")), "authorization_required"),
-    (ReplyBus(reply=error("org.freedesktop.PolicyKit1.Error.NotAuthorized")), "authorization_required")])
+@pytest.mark.parametrize(
+    "bus,code",
+    [
+        (None, "service_unavailable"),
+        (ReplyBus(raises=EOFError()), "service_unavailable"),
+        (ReplyBus(reply=None), "system_error"),
+        (ReplyBus(reply=error("org.x.Failed")), "system_error"),
+        (ReplyBus(reply=error("org.freedesktop.DBus.Error.AccessDenied")), "authorization_required"),
+        (ReplyBus(reply=error("org.freedesktop.PolicyKit1.Error.NotAuthorized")), "authorization_required"),
+    ],
+)
 async def test_call_errors(bus, code):
     with pytest.raises(BridgeError) as raised:
         await runtime_io.call(bus, "org.example.Service", "/p", "org.example.I", "M")
@@ -284,8 +311,9 @@ async def test_call_errors(bus, code):
 
 async def test_call_times_out():
     with pytest.raises(BridgeError) as raised:
-        await runtime_io.call(ReplyBus(reply=ok(), delay=1), "org.example.Service", "/p", "org.example.I", "M",
-                              timeout=0.01)
+        await runtime_io.call(
+            ReplyBus(reply=ok(), delay=1), "org.example.Service", "/p", "org.example.I", "M", timeout=0.01
+        )
     assert raised.value.code == "service_unavailable"
 
 
@@ -316,16 +344,34 @@ async def test_desktop_environment_without_systemd(monkeypatch):
 
 # --- MPRIS ------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("status,expected", [("Playing", "playing"), ("Paused", "paused"),
-                                             ("Stopped", "idle"), ("Weird", "unknown"), (None, "unknown")])
+
+@pytest.mark.parametrize(
+    "status,expected",
+    [
+        ("Playing", "playing"),
+        ("Paused", "paused"),
+        ("Stopped", "idle"),
+        ("Weird", "unknown"),
+        (None, "unknown"),
+    ],
+)
 def test_every_playback_status_maps(status, expected):
     from bigscreen_bridge.mpris import STATES
+
     assert STATES.get(status, "unknown") == expected
 
 
 def test_media_state_drops_bad_metadata_and_never_exposes_urls():
-    state = media_state({"Metadata": {"xesam:title": "T" * 3000, "mpris:length": 2_000_000,
-                                      "xesam:url": "file:///home/private.mkv"}, "Position": 1_000_000})
+    state = media_state(
+        {
+            "Metadata": {
+                "xesam:title": "T" * 3000,
+                "mpris:length": 2_000_000,
+                "xesam:url": "file:///home/private.mkv",
+            },
+            "Position": 1_000_000,
+        }
+    )
     assert len(state["title"]) == 2048 and state["duration"] == 2 and state["position"] == 1
     assert "file://" not in json.dumps(state)
     bad = media_state({"Metadata": "nonsense", "Position": -5})
@@ -336,7 +382,7 @@ class FakeMpris:
     """A session bus with MPRIS players on it, each a dict of its Player properties."""
 
     def __init__(self, players):
-        self.players = players          # bus name -> {"owner", "pid", "root", "player"}
+        self.players = players  # bus name -> {"owner", "pid", "root", "player"}
         self.handlers, self.matches, self.calls = [], [], []
         self.obey = True
 
@@ -361,11 +407,23 @@ class FakeMpris:
             return ok(player["pid"]) if player.get("pid") else error("org.freedesktop.DBus.Error.Failed")
         if member == "GetAll":
             props = player["root"] if body[0] == "org.mpris.MediaPlayer2" else player["player"]
-            return ok({k: Variant("s" if isinstance(v, str) else "b" if isinstance(v, bool) else "x", v)
-                       for k, v in props.items()}) if props is not None else error("org.x.NoInterface")
+            return (
+                ok(
+                    {
+                        k: Variant("s" if isinstance(v, str) else "b" if isinstance(v, bool) else "x", v)
+                        for k, v in props.items()
+                    }
+                )
+                if props is not None
+                else error("org.x.NoInterface")
+            )
         if member in ("Play", "Pause", "Stop"):
             if self.obey:
-                player["player"]["PlaybackStatus"] = {"Play": "Playing", "Pause": "Paused", "Stop": "Stopped"}[member]
+                player["player"]["PlaybackStatus"] = {
+                    "Play": "Playing",
+                    "Pause": "Paused",
+                    "Stop": "Stopped",
+                }[member]
             return ok()
         raise AssertionError(member)
 
@@ -377,8 +435,12 @@ class FakeMpris:
 
 
 def player(owner, status="Playing", identity="VLC media player", desktop="vlc", **extra):
-    return {"owner": owner, "pid": None, "root": {"Identity": identity, "DesktopEntry": desktop},
-            "player": {"PlaybackStatus": status, "CanControl": True, "CanPause": True, "CanPlay": True, **extra}}
+    return {
+        "owner": owner,
+        "pid": None,
+        "root": {"Identity": identity, "DesktopEntry": desktop},
+        "player": {"PlaybackStatus": status, "CanControl": True, "CanPause": True, "CanPlay": True, **extra},
+    }
 
 
 async def test_registry_reads_players_and_follows_them_coming_and_going():
@@ -389,8 +451,12 @@ async def test_registry_reads_players_and_follows_them_coming_and_going():
     assert len(bus.matches) == 3
     (record,) = registry.players.values()
     assert record["state"] == "playing" and record["capabilities"] == ["pause", "stop"]
-    bus.signal("org.freedesktop.DBus", "org.freedesktop.DBus", "NameOwnerChanged",
-               ["org.mpris.MediaPlayer2.vlc", ":1.10", ""])
+    bus.signal(
+        "org.freedesktop.DBus",
+        "org.freedesktop.DBus",
+        "NameOwnerChanged",
+        ["org.mpris.MediaPlayer2.vlc", ":1.10", ""],
+    )
     assert registry.players[record["id"]]["available"] is False and registry.dirty
     assert changes[-1] == (record["id"], "playing", "unavailable")
     del bus.players["org.mpris.MediaPlayer2.vlc"]
@@ -404,18 +470,30 @@ async def test_properties_changed_updates_the_state():
     registry = MprisRegistry(bus, lambda *change: changes.append(change))
     await registry.initialize()
     registry.dirty = False
-    bus.signal(":1.10", "org.freedesktop.DBus.Properties", "PropertiesChanged",
-               ["org.mpris.MediaPlayer2.Player", {"PlaybackStatus": Variant("s", "Paused")}, []])
+    bus.signal(
+        ":1.10",
+        "org.freedesktop.DBus.Properties",
+        "PropertiesChanged",
+        ["org.mpris.MediaPlayer2.Player", {"PlaybackStatus": Variant("s", "Paused")}, []],
+    )
     (record,) = registry.players.values()
     assert record["state"] == "paused" and changes == [(record["id"], "playing", "paused")] and registry.dirty
-    bus.signal(":1.99", "org.freedesktop.DBus.Properties", "PropertiesChanged",
-               ["org.mpris.MediaPlayer2.Player", {"PlaybackStatus": Variant("s", "Playing")}, []])
-    assert record["state"] == "paused"      # a stranger's signal changes nothing
+    bus.signal(
+        ":1.99",
+        "org.freedesktop.DBus.Properties",
+        "PropertiesChanged",
+        ["org.mpris.MediaPlayer2.Player", {"PlaybackStatus": Variant("s", "Playing")}, []],
+    )
+    assert record["state"] == "paused"  # a stranger's signal changes nothing
 
 
 async def test_a_player_that_will_not_answer_is_skipped():
-    bus = FakeMpris({"org.mpris.MediaPlayer2.good": player(":1.10"),
-                     "org.mpris.MediaPlayer2.broken": dict(player(":1.11"), player=None)})
+    bus = FakeMpris(
+        {
+            "org.mpris.MediaPlayer2.good": player(":1.10"),
+            "org.mpris.MediaPlayer2.broken": dict(player(":1.11"), player=None),
+        }
+    )
     registry = MprisRegistry(bus)
     await registry.initialize()
     assert [r["bus_name"] for r in registry.players.values()] == ["org.mpris.MediaPlayer2.good"]
@@ -426,17 +504,36 @@ async def test_control_plays_and_confirms():
     registry = MprisRegistry(bus)
     await registry.initialize()
     (key,) = registry.players
-    assert await registry.control(key, "play") == {"changed": True, "state": "playing", "completion_confirmed": True}
-    assert await registry.control(key, "play") == {"changed": False, "state": "playing", "completion_confirmed": True}
+    assert await registry.control(key, "play") == {
+        "changed": True,
+        "state": "playing",
+        "completion_confirmed": True,
+    }
+    assert await registry.control(key, "play") == {
+        "changed": False,
+        "state": "playing",
+        "completion_confirmed": True,
+    }
 
 
-@pytest.mark.parametrize("setup,command,code", [
-    (lambda r, b: r.players.clear(), "pause", "not_ready"),
-    (lambda r, b: next(iter(r.players.values())).update(role="music_assistant"), "pause", "music_assistant_required"),
-    (lambda r, b: b.players["org.mpris.MediaPlayer2.vlc"].update(owner=":1.77"), "pause", "not_ready"),
-    (lambda r, b: None, "next", "unsupported"),
-    (lambda r, b: b.players["org.mpris.MediaPlayer2.vlc"]["player"].update(CanPause=False), "pause", "unsupported"),
-])
+@pytest.mark.parametrize(
+    "setup,command,code",
+    [
+        (lambda r, b: r.players.clear(), "pause", "not_ready"),
+        (
+            lambda r, b: next(iter(r.players.values())).update(role="music_assistant"),
+            "pause",
+            "music_assistant_required",
+        ),
+        (lambda r, b: b.players["org.mpris.MediaPlayer2.vlc"].update(owner=":1.77"), "pause", "not_ready"),
+        (lambda r, b: None, "next", "unsupported"),
+        (
+            lambda r, b: b.players["org.mpris.MediaPlayer2.vlc"]["player"].update(CanPause=False),
+            "pause",
+            "unsupported",
+        ),
+    ],
+)
 async def test_control_refusals(setup, command, code):
     bus = FakeMpris({"org.mpris.MediaPlayer2.vlc": player(":1.10")})
     registry = MprisRegistry(bus)
@@ -451,6 +548,7 @@ async def test_control_refusals(setup, command, code):
 
 async def test_control_not_confirmed(monkeypatch):
     from bigscreen_bridge import mpris
+
     bus = FakeMpris({"org.mpris.MediaPlayer2.vlc": player(":1.10")})
     registry = MprisRegistry(bus)
     await registry.initialize()

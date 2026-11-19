@@ -3,6 +3,7 @@
 The app hooks run against a scripted app that answers each protocol command from a table,
 so the hooks' own validation runs. The bridge-level checks run on the in-process bridge.
 """
+
 import asyncio
 import json
 from types import SimpleNamespace
@@ -26,16 +27,23 @@ async def refused(coroutine, code):
 
 # --- system, audio and power commands ----------------------------------------------------
 
-@pytest.mark.parametrize("request_", [
-    {"command": "set_volume", "volume_level": 0.5, "app": "stremio"},
-    {"command": "mute", "volume_level": 0.5},
-    {"command": "pause_all", "app": "x"}])
+
+@pytest.mark.parametrize(
+    "request_",
+    [
+        {"command": "set_volume", "volume_level": 0.5, "app": "stremio"},
+        {"command": "mute", "volume_level": 0.5},
+        {"command": "pause_all", "app": "x"},
+    ],
+)
 async def test_system_commands_refuse_extra_arguments(bridge, request_):
     b, _ = bridge
     await refused(b.execute({"id": "r", **request_}), "invalid_request")
 
 
-@pytest.mark.parametrize("command", ["pause_all", "screen_off", "lock_screen", "get_power_state", "mute", "set_volume"])
+@pytest.mark.parametrize(
+    "command", ["pause_all", "screen_off", "lock_screen", "get_power_state", "mute", "set_volume"]
+)
 async def test_system_commands_without_their_module(bridge, command):
     b, _ = bridge
     request = {"id": "r", "command": command, **({"volume_level": 0.5} if command == "set_volume" else {})}
@@ -46,10 +54,15 @@ async def test_system_commands_reach_their_module_and_notify(bridge):
     b, _ = bridge
     notified = []
     b.notify = AsyncMock(side_effect=lambda: notified.append(1))
-    b.sessions = SimpleNamespace(execute=AsyncMock(return_value={"paused": []}), invalidate_app=lambda app: None)
+    b.sessions = SimpleNamespace(
+        execute=AsyncMock(return_value={"paused": []}), invalidate_app=lambda app: None
+    )
     b.audio = SimpleNamespace(execute=AsyncMock(return_value={"volume": 0.5}))
-    b.power = SimpleNamespace(refresh=AsyncMock(return_value={"display": {}}), lock=AsyncMock(return_value={}),
-                              display=AsyncMock(return_value={}))
+    b.power = SimpleNamespace(
+        refresh=AsyncMock(return_value={"display": {}}),
+        lock=AsyncMock(return_value={}),
+        display=AsyncMock(return_value={}),
+    )
     assert await b.execute({"id": "1", "command": "pause_all"}) == {"paused": []}
     assert await b.execute({"id": "2", "command": "set_volume", "volume_level": 0.5}) == {"volume": 0.5}
     await b.execute({"id": "3", "command": "get_power_state"})
@@ -61,6 +74,7 @@ async def test_system_commands_reach_their_module_and_notify(bridge):
 
 
 # --- focus and launching -----------------------------------------------------------------
+
 
 async def test_focus_refusals(bridge):
     b, _ = bridge
@@ -126,14 +140,32 @@ async def test_window_without_control_endpoint(bridge, quick_launch):
 
 # --- opening content and player commands ------------------------------------------------
 
+
 async def test_open_refusals_before_anything_moves(bridge):
     b, _ = bridge
-    b.stremio = SimpleNamespace(enabled=True, state={"ready": True}, refresh=AsyncMock(), content_types=["movie"],
-                                open=AsyncMock())
-    movie = {"id": "r", "command": "open", "app": "stremio", "content_type": "movie", "content_id": "tt0000000"}
+    b.stremio = SimpleNamespace(
+        enabled=True, state={"ready": True}, refresh=AsyncMock(), content_types=["movie"], open=AsyncMock()
+    )
+    movie = {
+        "id": "r",
+        "command": "open",
+        "app": "stremio",
+        "content_type": "movie",
+        "content_id": "tt0000000",
+    }
     await refused(b.open_content({**movie, "app": "nope"}), "unsupported")
-    await refused(b.open_content({**movie, "app": "couchside", "content_type": "album",
-                                  "content_id": "library://album/1", "resume": True}), "unsupported")
+    await refused(
+        b.open_content(
+            {
+                **movie,
+                "app": "couchside",
+                "content_type": "album",
+                "content_id": "library://album/1",
+                "resume": True,
+            }
+        ),
+        "unsupported",
+    )
     await refused(b.open_content({**movie, "content_type": "series"}), "unsupported")
     b.installed = set()
     await refused(b.open_content(movie), "not_installed")
@@ -147,23 +179,42 @@ async def test_open_refusals_before_anything_moves(bridge):
 async def test_a_hook_refusal_is_recorded_and_raised(bridge):
     b, _ = bridge
     b.wm.windows = [{"id": "w", "desktop": "io.github.shreyasajj.StremioTV", "active": True}]
-    b.stremio = SimpleNamespace(enabled=True, state={"ready": True}, refresh=AsyncMock(), content_types=["movie"],
-                                open=AsyncMock(side_effect=BridgeError("not_found", "No such title")),
-                                control=AsyncMock(side_effect=BridgeError("not_ready", "Nothing loaded")))
+    b.stremio = SimpleNamespace(
+        enabled=True,
+        state={"ready": True},
+        refresh=AsyncMock(),
+        content_types=["movie"],
+        open=AsyncMock(side_effect=BridgeError("not_found", "No such title")),
+        control=AsyncMock(side_effect=BridgeError("not_ready", "Nothing loaded")),
+    )
     errors = []
     b.diagnostics.hook_error = lambda hook, exc: errors.append(exc.code)
-    await refused(b.open_content({"id": "r", "command": "open", "app": "stremio", "content_type": "movie",
-                                  "content_id": "tt0000000"}), "not_found")
+    await refused(
+        b.open_content(
+            {
+                "id": "r",
+                "command": "open",
+                "app": "stremio",
+                "content_type": "movie",
+                "content_id": "tt0000000",
+            }
+        ),
+        "not_found",
+    )
     await refused(b.player_command({"id": "r", "command": "pause", "app": "stremio"}), "not_ready")
     assert errors == ["not_found", "not_ready"]
 
 
-@pytest.mark.parametrize("request_,code", [
-    ({"command": "pause", "app": "couchside"}, "unsupported"),
-    ({"command": "rewind", "app": "stremio"}, "unsupported"),
-    ({"command": "seek", "app": "stremio", "position": -1}, "invalid_request"),
-    ({"command": "volume_set", "app": "vacuumtube", "volume_level": 2}, "invalid_request"),
-    ({"command": "volume_mute", "app": "vacuumtube", "muted": "yes"}, "invalid_request")])
+@pytest.mark.parametrize(
+    "request_,code",
+    [
+        ({"command": "pause", "app": "couchside"}, "unsupported"),
+        ({"command": "rewind", "app": "stremio"}, "unsupported"),
+        ({"command": "seek", "app": "stremio", "position": -1}, "invalid_request"),
+        ({"command": "volume_set", "app": "vacuumtube", "volume_level": 2}, "invalid_request"),
+        ({"command": "volume_mute", "app": "vacuumtube", "muted": "yes"}, "invalid_request"),
+    ],
+)
 async def test_player_command_refusals(bridge, request_, code):
     b, _ = bridge
     invalidated = []
@@ -185,10 +236,12 @@ async def test_volume_mute_reaches_the_app(bridge):
 
 # --- each app hook against a scripted app ------------------------------------------------
 
+
 def scripted(cls, answers, *args):
     """`cls` with its transport replaced by an app that answers `answers[command]`."""
+
     class Scripted(cls):
-        async def transport(self, payload, timeout):
+        async def transport(self, payload):
             request = json.loads(payload)
             answer = answers[request["command"]]
             if isinstance(answer, BaseException):
@@ -196,6 +249,7 @@ def scripted(cls, answers, *args):
             if callable(answer):
                 answer = answer(request)
             return json.dumps({"id": request["id"], **answer})
+
     hook = Scripted(*args)
     hook.recorder = SimpleNamespace(hook_read=lambda *a: None, hook_signal=lambda *a: None)
     return hook
@@ -207,11 +261,30 @@ def ok(result):
 
 STATES = {
     StremioHook: {"protocol": 1, "ready": True, "content_types": ["movie"], "capabilities": [], "media": {}},
-    VacuumTubeHook: {"protocol": 1, "ready": True, "content_types": ["video"], "capabilities": [], "media": {},
-                     "view": "home"},
-    FlimmerHook: {"protocol": 1, "ready": True, "content_types": ["channel"], "capabilities": [], "media": {}},
-    CouchsideHook: {"protocol": 1, "ready": True, "music_assistant_ready": True, "playback_owner": "music_assistant",
-                    "content_types": ["now_playing", "album"], "view": {"type": "home", "id": ""}, "ma_player_id": "p"},
+    VacuumTubeHook: {
+        "protocol": 1,
+        "ready": True,
+        "content_types": ["video"],
+        "capabilities": [],
+        "media": {},
+        "view": "home",
+    },
+    FlimmerHook: {
+        "protocol": 1,
+        "ready": True,
+        "content_types": ["channel"],
+        "capabilities": [],
+        "media": {},
+    },
+    CouchsideHook: {
+        "protocol": 1,
+        "ready": True,
+        "music_assistant_ready": True,
+        "playback_owner": "music_assistant",
+        "content_types": ["now_playing", "album"],
+        "view": {"type": "home", "id": ""},
+        "ma_player_id": "p",
+    },
 }
 
 
@@ -219,20 +292,32 @@ def make(cls, answers):
     return scripted(cls, answers, None, True) if cls is not VacuumTubeHook else scripted(cls, answers, True)
 
 
-@pytest.mark.parametrize("cls,broken", [
-    (StremioHook, {"media": "nope"}), (VacuumTubeHook, {"capabilities": "nope"}),
-    (FlimmerHook, {"content_types": ["movie"]}), (CouchsideHook, {"playback_owner": "couchside"})])
+@pytest.mark.parametrize(
+    "cls,broken",
+    [
+        (StremioHook, {"media": "nope"}),
+        (VacuumTubeHook, {"capabilities": "nope"}),
+        (FlimmerHook, {"content_types": ["movie"]}),
+        (CouchsideHook, {"playback_owner": "couchside"}),
+    ],
+)
 async def test_a_hook_refuses_an_unknown_protocol(cls, broken):
     hook = make(cls, {"get_state": ok({**STATES[cls], **broken})})
     await hook.refresh()
     assert hook.state is None and hook.enabled
 
 
-@pytest.mark.parametrize("cls,kind,value", [(StremioHook, "series", "tt0000000"),
-                                            (VacuumTubeHook, "playlist", "PL0000000000000000"),
-                                            (CouchsideHook, "artist", "library://artist/1")])
+@pytest.mark.parametrize(
+    "cls,kind,value",
+    [
+        (StremioHook, "series", "tt0000000"),
+        (VacuumTubeHook, "playlist", "PL0000000000000000"),
+        (CouchsideHook, "artist", "library://artist/1"),
+    ],
+)
 async def test_open_a_kind_the_running_app_does_not_offer(cls, kind, value, monkeypatch):
     from bigscreen_bridge import hooks
+
     real_timeout = asyncio.timeout
     monkeypatch.setattr(hooks.asyncio, "timeout", lambda delay: real_timeout(min(delay, 0.3)))
     hook = make(cls, {"get_state": ok(STATES[cls]), "open": ok({"view": {"type": kind, "id": value}})})
@@ -242,11 +327,14 @@ async def test_open_a_kind_the_running_app_does_not_offer(cls, kind, value, monk
     await refused(deliver("r", kind, value), code)
 
 
-@pytest.mark.parametrize("cls,kind,value", [(StremioHook, "movie", "tt0000000"),
-                                            (VacuumTubeHook, "video", "aaaaaaaaaaa")])
+@pytest.mark.parametrize(
+    "cls,kind,value", [(StremioHook, "movie", "tt0000000"), (VacuumTubeHook, "video", "aaaaaaaaaaa")]
+)
 async def test_open_an_offered_kind_asks_the_app_and_rereads(cls, kind, value):
     reads = []
-    hook = make(cls, {"get_state": lambda r: reads.append(1) or ok(STATES[cls]), "open": ok({"opened": True})})
+    hook = make(
+        cls, {"get_state": lambda r: reads.append(1) or ok(STATES[cls]), "open": ok({"opened": True})}
+    )
     await hook.refresh()
     assert await hook.open("r", kind, value) == {"opened": True}
     assert len(reads) >= 3
@@ -263,8 +351,22 @@ async def test_an_app_that_never_answers():
     await refused(hook.request("get_state"), hook.timeout_code)
 
 
+async def test_an_app_that_hangs_runs_out_the_commands_own_deadline():
+    hangs = asyncio.Event()
+
+    async def hang(_request):
+        await hangs.wait()
+
+    hook = make(StremioHook, {})
+    hook.transport = hang
+    hook.timeouts = {"open": 0.05}
+    async with asyncio.timeout(2):  # the hook's deadline, not this one, must end it
+        await refused(hook.request("open"), hook.timeout_code)
+
+
 def test_now_playing_takes_no_item():
     from bigscreen_bridge.couchside import validate_content
+
     with pytest.raises(BridgeError) as raised:
         validate_content("now_playing", "library://track/1")
     assert raised.value.code == "invalid_request"

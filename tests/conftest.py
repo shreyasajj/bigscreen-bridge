@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import os
 import sys
 from datetime import UTC, datetime, timedelta
@@ -10,15 +11,15 @@ from bigscreen_bridge.diagnostics import Recorder
 from bigscreen_bridge.server import Bridge, application
 
 # The integration is a separate repository; these tests run it against the real bridge.
-INTEGRATION = Path(os.environ.get("BIGSCREEN_INTEGRATION", Path(__file__).resolve().parents[2] / "ha-bigscreen-bridge"))
+INTEGRATION = Path(
+    os.environ.get("BIGSCREEN_INTEGRATION", Path(__file__).resolve().parents[2] / "ha-bigscreen-bridge")
+)
 if not (INTEGRATION / "custom_components/bigscreen_bridge/manifest.json").is_file():
     raise pytest.UsageError(f"Check out ha-bigscreen-bridge at {INTEGRATION} or set BIGSCREEN_INTEGRATION")
 sys.path.insert(0, str(INTEGRATION))
 
-try:  # Home Assistant fixtures, where Home Assistant can be imported (Python 3.14)
+with contextlib.suppress(ImportError):  # Home Assistant fixtures, where it imports (Python 3.14)
     from ha_helpers import coordinator  # noqa: F401
-except ImportError:
-    pass
 
 
 class WindowManager:

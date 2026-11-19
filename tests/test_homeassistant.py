@@ -1,4 +1,5 @@
 """Tests against real HA core classes; no running HA installation required."""
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -19,8 +20,12 @@ async def test_native_player_browse_sources_and_unsupported_features(coordinator
     assert player.available
     assert player.state == MediaPlayerState.OFF
     assert player.source_list == ["Couchside", "Stremio TV", "Flimmer", "VacuumTube"]
-    assert not player.supported_features & (MediaPlayerEntityFeature.PLAY | MediaPlayerEntityFeature.PAUSE
-                                           | MediaPlayerEntityFeature.SEEK | MediaPlayerEntityFeature.VOLUME_SET)
+    assert not player.supported_features & (
+        MediaPlayerEntityFeature.PLAY
+        | MediaPlayerEntityFeature.PAUSE
+        | MediaPlayerEntityFeature.SEEK
+        | MediaPlayerEntityFeature.VOLUME_SET
+    )
     library = await player.async_browse_media()
     assert len(library.children) == 4
     assert all(item.can_play and item.media_content_type == "app" for item in library.children)
@@ -69,6 +74,7 @@ async def test_config_flow_checks_live_bridge_identity(coordinator, token, error
     from unittest.mock import AsyncMock
 
     from custom_components.bigscreen_bridge.config_flow import ConfigFlow
+
     flow = ConfigFlow()
     flow.hass = coordinator.hass
     flow.async_set_unique_id = AsyncMock()
@@ -87,6 +93,7 @@ async def test_config_flow_checks_live_bridge_identity(coordinator, token, error
 async def test_config_flow_pairs_with_the_code_shown_on_the_tv(coordinator, bridge, tmp_path):
     from bigscreen_bridge.pairing import Pairing
     from custom_components.bigscreen_bridge.config_flow import ConfigFlow
+
     b, _ = bridge
     b.pairing = Pairing(tmp_path / "clients.json")
     shown = b.status()["pairing"]["code"]
@@ -102,12 +109,13 @@ async def test_config_flow_pairs_with_the_code_shown_on_the_tv(coordinator, brid
     created = await flow.async_step_user({"url": url, "code": shown.lower().replace("-", " ")})
     token = created["data"]["token"]
     assert created["data"] == {"url": url, "token": token} and b.pairing.accepts(token)
-    assert b.status()["pairing"] is None   # paired: the TV stops showing a code
+    assert b.status()["pairing"] is None  # paired: the TV stops showing a code
     assert list(wrong["data_schema"].schema) == ["url", "code"]
 
 
 async def test_reauth_rejects_replacement_device(coordinator, bridge):
     from custom_components.bigscreen_bridge.config_flow import ConfigFlow
+
     b, _ = bridge
     flow = ConfigFlow()
     flow.hass = coordinator.hass
@@ -123,8 +131,12 @@ async def test_reauth_rejects_replacement_device(coordinator, bridge):
 async def test_couchside_typed_navigation_preserves_ma_control(coordinator, bridge):
     b, _ = bridge
     b.wm.windows = [{"id": "music", "desktop": "io.github.shreyasajj.Couchside"}]
-    b.couchside = SimpleNamespace(enabled=True, state={"ma_player_id": "local-ma-player"}, refresh=AsyncMock(),
-        navigate=AsyncMock(return_value={"view": {"type": "now_playing", "id": ""}}))
+    b.couchside = SimpleNamespace(
+        enabled=True,
+        state={"ma_player_id": "local-ma-player"},
+        refresh=AsyncMock(),
+        navigate=AsyncMock(return_value={"view": {"type": "now_playing", "id": ""}}),
+    )
     coordinator.async_set_updated_data(await coordinator._async_update_data())
     player = BigscreenPlayer(coordinator)
     await player.async_play_media("couchside_now_playing", "")
@@ -138,8 +150,12 @@ async def test_couchside_typed_navigation_preserves_ma_control(coordinator, brid
 async def couchside_active(coordinator, bridge):
     b, _ = bridge
     b.wm.windows = [{"id": "music", "desktop": "io.github.shreyasajj.Couchside", "active": True}]
-    b.couchside = SimpleNamespace(enabled=True, state={"ma_player_id": "local-ma-player"}, refresh=AsyncMock(),
-        navigate=AsyncMock(return_value={"view": {"type": "now_playing", "id": ""}}))
+    b.couchside = SimpleNamespace(
+        enabled=True,
+        state={"ma_player_id": "local-ma-player"},
+        refresh=AsyncMock(),
+        navigate=AsyncMock(return_value={"view": {"type": "now_playing", "id": ""}}),
+    )
     coordinator.async_set_updated_data(await coordinator._async_update_data())
     player = BigscreenPlayer(coordinator)
     player.hass = coordinator.hass
@@ -151,7 +167,11 @@ async def test_couchside_controls_are_forwarded_to_music_assistant(coordinator, 
     entity_id, calls = await music_assistant(coordinator.hass, monkeypatch)
     assert player.supported_features & MUSIC == MUSIC
     assert player.state == MediaPlayerState.PLAYING
-    assert (player.media_title, player.media_artist, player.media_album_name) == ("Be Mine", "Ofenbach", "Be Mine")
+    assert (player.media_title, player.media_artist, player.media_album_name) == (
+        "Be Mine",
+        "Ofenbach",
+        "Be Mine",
+    )
     assert (player.media_position, player.media_duration) == (42, 180)
     assert player.extra_state_attributes["music_assistant_entity_id"] == entity_id
     assert player.entity_picture == "/api/media_player_proxy/media_player.tv_music?token=t"
@@ -161,8 +181,14 @@ async def test_couchside_controls_are_forwarded_to_music_assistant(coordinator, 
     await player.async_media_previous_track()
     await player.async_media_seek(30)
     await player.async_media_stop()
-    assert [c[0] for c in calls] == ["media_pause", "media_play", "media_next_track", "media_previous_track",
-                                     "media_seek", "media_stop"]
+    assert [c[0] for c in calls] == [
+        "media_pause",
+        "media_play",
+        "media_next_track",
+        "media_previous_track",
+        "media_seek",
+        "media_stop",
+    ]
     assert all(entity_id in str(c[1]["entity_id"]) for c in calls)
     assert calls[4][1]["seek_position"] == 30
 
@@ -172,20 +198,28 @@ async def test_picking_couchside_music_plays_it_and_opens_now_playing(coordinato
     player = await couchside_active(coordinator, bridge)
     entity_id, calls = await music_assistant(coordinator.hass, monkeypatch)
     await player.async_play_media("couchside_track", "library://track/7")
-    assert calls == [("play_media", {"entity_id": entity_id, "media_content_id": "library://track/7",
-                                     "media_content_type": "music"})]
+    assert calls == [
+        (
+            "play_media",
+            {"entity_id": entity_id, "media_content_id": "library://track/7", "media_content_type": "music"},
+        )
+    ]
     assert b.couchside.navigate.await_args.args[1:] == ("now_playing", "")
-    await player.async_play_media("couchside_search", "ofenbach")      # search still only navigates
+    await player.async_play_media("couchside_search", "ofenbach")  # search still only navigates
     assert len(calls) == 1 and b.couchside.navigate.await_args.args[1:] == ("search", "ofenbach")
 
 
-async def test_without_a_usable_music_assistant_player_couchside_only_navigates(coordinator, bridge, monkeypatch):
+async def test_without_a_usable_music_assistant_player_couchside_only_navigates(
+    coordinator, bridge, monkeypatch
+):
     b, _ = bridge
     player = await couchside_active(coordinator, bridge)
-    monkeypatch.setattr("custom_components.bigscreen_bridge.media_player.music_assistant_entity_id",
-                        lambda _hass, _player: None)                                # no MA integration
+    monkeypatch.setattr(
+        "custom_components.bigscreen_bridge.media_player.music_assistant_entity_id",
+        lambda _hass, _player: None,
+    )  # no MA integration
     assert not player.supported_features & MediaPlayerEntityFeature.PLAY
-    entity_id, calls = await music_assistant(coordinator.hass, monkeypatch, state="unavailable")
+    _entity_id, calls = await music_assistant(coordinator.hass, monkeypatch, state="unavailable")
     assert not player.supported_features & MediaPlayerEntityFeature.PLAY
     with pytest.raises(HomeAssistantError):
         await player.async_media_pause()
@@ -219,9 +253,10 @@ async def test_music_assistant_changes_show_on_the_tv_player_at_once(coordinator
 
 async def test_bridge_status_entities(coordinator, bridge, recorder):
     from custom_components.bigscreen_bridge import binary_sensor, sensor
+
     b, _ = bridge
     b.diagnostics = recorder
-    recorder.started(8765)                       # as serve() does
+    recorder.started(8765)  # as serve() does
     await coordinator.refresh_diagnostics()
     diagnostics = recorder.to_dict(b)
     sensors = by_key(sensor.entities(coordinator))
@@ -236,11 +271,12 @@ async def test_bridge_status_entities(coordinator, bridge, recorder):
     assert sensors["version"].entity_category.value == "diagnostic"
     binaries = by_key(binary_sensor.entities(coordinator))
     assert binaries["health"].is_on is (diagnostics["service"]["health"] != "ok")
-    assert "ledfx_service" not in sensors and "ledfx_service" not in binaries   # this bridge has no lights
+    assert "ledfx_service" not in sensors and "ledfx_service" not in binaries  # this bridge has no lights
 
 
 async def test_light_entities_and_their_commands(coordinator, bridge):
     from custom_components.bigscreen_bridge import binary_sensor, light, scene, sensor, switch
+
     b, _ = bridge
     b.lights = RecordingLights()
     coordinator.async_set_updated_data(await coordinator._async_update_data())
@@ -263,13 +299,23 @@ async def test_light_entities_and_their_commands(coordinator, bridge):
     assert blade.name == "LedFx Blade Scene"
     await blade.async_activate()
     assert b.lights.calls == [
-        ("ledfx_light", {"virtual": "tv-backlight", "on": True, "effect": "fire", "brightness": 0.502, "color": "#00ff00"}),
+        (
+            "ledfx_light",
+            {
+                "virtual": "tv-backlight",
+                "on": True,
+                "effect": "fire",
+                "brightness": 0.502,
+                "color": "#00ff00",
+            },
+        ),
         ("ledfx_light", {"virtual": "tv-backlight", "on": False}),
         ("hyperhdr_light", {"instance": 1, "on": True, "color": [255, 0, 0], "brightness": 1.0}),
         ("hyperhdr_light", {"instance": 1, "on": True, "effect": "Video"}),
         ("hyperhdr_light", {"instance": 1, "on": False}),
         ("ledfx_pause", {"paused": True}),
-        ("ledfx_scene", {"scene": "blade-scene", "active": True})]
+        ("ledfx_scene", {"scene": "blade-scene", "active": True}),
+    ]
     binaries = by_key(binary_sensor.entities(coordinator))
     assert binaries["ledfx_service"].is_on and binaries["hyperhdr_service"].is_on
     assert binaries["hyperhdr_output"].is_on is False
@@ -282,6 +328,7 @@ async def test_light_entities_and_their_commands(coordinator, bridge):
 
 async def test_a_stopped_light_service_makes_its_entities_unavailable(coordinator, bridge):
     from custom_components.bigscreen_bridge import binary_sensor, light
+
     b, _ = bridge
     b.lights = RecordingLights()
     coordinator.async_set_updated_data(await coordinator._async_update_data())
@@ -295,23 +342,36 @@ async def test_a_stopped_light_service_makes_its_entities_unavailable(coordinato
 
 async def test_downloaded_diagnostics_never_hold_the_token(coordinator, bridge, recorder):
     from custom_components.bigscreen_bridge.diagnostics import async_get_config_entry_diagnostics
+
     b, _ = bridge
     b.diagnostics = recorder
     await coordinator.refresh_diagnostics()
     coordinator.entry.runtime_data = coordinator
     report = await async_get_config_entry_diagnostics(coordinator.hass, coordinator.entry)
     assert "a" * 48 not in str(report)
-    assert report["bridge_diagnostics"]["service"]["version"] and report["state"]["device_id"] == "test-device"
+    assert (
+        report["bridge_diagnostics"]["service"]["version"] and report["state"]["device_id"] == "test-device"
+    )
 
 
 def config_entry(http, token="a" * 48):
     from types import MappingProxyType
 
     from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-    entry = ConfigEntry(data={"url": str(http.make_url("")), "token": token}, discovery_keys=MappingProxyType({}),
-                        domain="bigscreen_bridge", minor_version=1, options={}, source="user",
-                        subentries_data=None, title="TV", unique_id="test-device", version=1,
-                        state=ConfigEntryState.SETUP_IN_PROGRESS)
+
+    entry = ConfigEntry(
+        data={"url": str(http.make_url("")), "token": token},
+        discovery_keys=MappingProxyType({}),
+        domain="bigscreen_bridge",
+        minor_version=1,
+        options={},
+        source="user",
+        subentries_data=None,
+        title="TV",
+        unique_id="test-device",
+        version=1,
+        state=ConfigEntryState.SETUP_IN_PROGRESS,
+    )
     return entry
 
 
@@ -319,10 +379,14 @@ def config_entry(http, token="a" * 48):
 async def hass_with_entries(tmp_path, monkeypatch):
     hass = HomeAssistant(str(tmp_path))
     session = aiohttp.ClientSession()
-    monkeypatch.setattr("custom_components.bigscreen_bridge.coordinator.async_get_clientsession", lambda _: session)
-    hass.config_entries = SimpleNamespace(async_forward_entry_setups=AsyncMock(),
-                                          async_unload_platforms=AsyncMock(return_value=True),
-                                          async_reload=AsyncMock())
+    monkeypatch.setattr(
+        "custom_components.bigscreen_bridge.coordinator.async_get_clientsession", lambda _: session
+    )
+    hass.config_entries = SimpleNamespace(
+        async_forward_entry_setups=AsyncMock(),
+        async_unload_platforms=AsyncMock(return_value=True),
+        async_reload=AsyncMock(),
+    )
     yield hass
     await session.close()
 
@@ -330,12 +394,19 @@ async def hass_with_entries(tmp_path, monkeypatch):
 async def test_setup_entry_forwards_every_platform_and_unload_closes(bridge, hass_with_entries):
     from custom_components.bigscreen_bridge import PLATFORMS, async_setup_entry, async_unload_entry
     from homeassistant.const import Platform
+
     _, http = bridge
     hass, entry = hass_with_entries, config_entry(http)
     assert await async_setup_entry(hass, entry)
     hass.config_entries.async_forward_entry_setups.assert_awaited_once_with(entry, PLATFORMS)
-    assert set(PLATFORMS) == {Platform.MEDIA_PLAYER, Platform.SENSOR, Platform.BINARY_SENSOR, Platform.SWITCH,
-                              Platform.LIGHT, Platform.SCENE}
+    assert set(PLATFORMS) == {
+        Platform.MEDIA_PLAYER,
+        Platform.SENSOR,
+        Platform.BINARY_SENSOR,
+        Platform.SWITCH,
+        Platform.LIGHT,
+        Platform.SCENE,
+    }
     client = entry.runtime_data.client
     assert not client.ws.closed
     assert await async_unload_entry(hass, entry)
@@ -344,6 +415,7 @@ async def test_setup_entry_forwards_every_platform_and_unload_closes(bridge, has
 
 async def test_setup_with_a_revoked_token_asks_for_reauth(bridge, hass_with_entries):
     from custom_components.bigscreen_bridge import async_setup_entry
+
     _, http = bridge
     with pytest.raises(ConfigEntryAuthFailed):
         await async_setup_entry(hass_with_entries, config_entry(http, token="b" * 48))
@@ -352,6 +424,7 @@ async def test_setup_with_a_revoked_token_asks_for_reauth(bridge, hass_with_entr
 
 async def test_setup_closes_the_connection_when_platforms_fail(bridge, hass_with_entries):
     from custom_components.bigscreen_bridge import async_setup_entry
+
     _, http = bridge
     entry = config_entry(http)
     hass_with_entries.config_entries.async_forward_entry_setups.side_effect = RuntimeError("platform broke")
@@ -362,6 +435,7 @@ async def test_setup_closes_the_connection_when_platforms_fail(bridge, hass_with
 
 async def test_unload_refused_keeps_the_connection(bridge, hass_with_entries):
     from custom_components.bigscreen_bridge import async_setup_entry, async_unload_entry
+
     _, http = bridge
     entry = config_entry(http)
     await async_setup_entry(hass_with_entries, entry)
@@ -373,6 +447,7 @@ async def test_unload_refused_keeps_the_connection(bridge, hass_with_entries):
 
 async def test_options_change_reloads_the_entry(bridge, hass_with_entries):
     from custom_components.bigscreen_bridge import async_reload_entry
+
     _, http = bridge
     entry = config_entry(http)
     await async_reload_entry(hass_with_entries, entry)

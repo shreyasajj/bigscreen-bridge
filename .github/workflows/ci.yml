@@ -105,6 +105,7 @@ jobs:
           python-version: "3.12"
       - run: pip install ruff==0.17.5
       - run: ruff check --output-format github bigscreen-bridge tests scripts
+      - run: ruff format --check bigscreen-bridge tests scripts
 
   shellcheck:
     # Required to merge into main.

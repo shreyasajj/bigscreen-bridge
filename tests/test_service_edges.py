@@ -1,5 +1,6 @@
 """Error paths of the bridge's system services: audio, display power and logind, the
 bigscreen:// link opener, the updater's real side effects, and the service lifecycle."""
+
 import asyncio
 import hashlib
 import http.server
@@ -21,14 +22,17 @@ from dbus_next import MessageType, Variant
 
 # --- audio ------------------------------------------------------------------------------
 
+
 def test_flatpak_app_from_the_process_cgroup(tmp_path):
     (tmp_path / "42").mkdir()
-    (tmp_path / "42/cgroup").write_text("0::/user.slice/app-flatpak-io.github.shreyasajj.StremioTV-1234.scope\n")
+    (tmp_path / "42/cgroup").write_text(
+        "0::/user.slice/app-flatpak-io.github.shreyasajj.StremioTV-1234.scope\n"
+    )
     (tmp_path / "43").mkdir()
     (tmp_path / "43/cgroup").write_text("0::/user.slice/session.scope\n")
     assert process_app_id(42, tmp_path) == "io.github.shreyasajj.StremioTV"
     assert process_app_id(43, tmp_path) is None
-    assert process_app_id(44, tmp_path) is None             # gone
+    assert process_app_id(44, tmp_path) is None  # gone
     assert process_app_id("not a pid", tmp_path) is None
 
 
@@ -46,9 +50,18 @@ def test_unreadable_volume(text):
 
 
 def test_streams_skip_malformed_rows():
-    rows = ["not a row", {"properties": "nope"}, {"properties": {}, "index": "x"},
-            {"properties": {"application.name": "VLC"}, "index": 3, "corked": False, "mute": False,
-             "volume": {"front-left": {"value_percent": "50%"}}}]
+    rows = [
+        "not a row",
+        {"properties": "nope"},
+        {"properties": {}, "index": "x"},
+        {
+            "properties": {"application.name": "VLC"},
+            "index": 3,
+            "corked": False,
+            "mute": False,
+            "volume": {"front-left": {"value_percent": "50%"}},
+        },
+    ]
     assert parse_streams({"not": "a list"}) == []
     (stream,) = parse_streams(rows)
     assert stream["index"] == 3 and stream["volume"] == 0.5 and stream["stream_active"] is True
@@ -124,6 +137,7 @@ async def test_a_sink_that_ignores_the_change_is_only_accepted():
 
 # --- display power, logind and the screen locker ----------------------------------------
 
+
 def test_dpms_parsing():
     assert parse_dpms("garbage") == {"supported": False, "outputs": {}, "display_on": None}
     state = parse_dpms("dpms mode for screen HDMI-A-1: off\ndpms mode for screen DP-1: on\n")
@@ -131,8 +145,12 @@ def test_dpms_parsing():
 
 
 def test_only_blocking_inhibitors_for_the_operation_count():
-    rows = [["sleep:shutdown", "Updater", "Installing", "block"], ["sleep", "Player", "Playing", "delay"],
-            ["idle", "Video", "Watching", "block"], ["short"]]
+    rows = [
+        ["sleep:shutdown", "Updater", "Installing", "block"],
+        ["sleep", "Player", "Playing", "delay"],
+        ["idle", "Video", "Watching", "block"],
+        ["short"],
+    ]
     assert [row["who"] for row in blocked_inhibitors(rows, "shutdown")] == ["Updater"]
     assert [row["who"] for row in blocked_inhibitors(rows, "sleep")] == ["Updater"]
 
@@ -157,7 +175,13 @@ class Logind:
     """System and session bus with logind and the screen locker."""
 
     def __init__(self, can="yes", inhibitors=(), preparing=False, locked=False, missing=False):
-        self.can, self.inhibitors, self.preparing, self.locked, self.missing = can, list(inhibitors), preparing, locked, missing
+        self.can, self.inhibitors, self.preparing, self.locked, self.missing = (
+            can,
+            list(inhibitors),
+            preparing,
+            locked,
+            missing,
+        )
         self.calls, self.handlers = [], []
 
     def add_message_handler(self, handler):
@@ -166,7 +190,11 @@ class Logind:
     async def call(self, message):
         self.calls.append(message.member)
         if self.missing and message.member != "AddMatch":
-            return SimpleNamespace(message_type=MessageType.ERROR, body=[], error_name="org.freedesktop.DBus.Error.ServiceUnknown")
+            return SimpleNamespace(
+                message_type=MessageType.ERROR,
+                body=[],
+                error_name="org.freedesktop.DBus.Error.ServiceUnknown",
+            )
         member = message.member
         if member in ("AddMatch",):
             return reply()
@@ -177,13 +205,18 @@ class Logind:
         if member == "ListInhibitors":
             return reply(self.inhibitors)
         if member == "GetAll":
-            return reply({"PreparingForShutdown": Variant("b", self.preparing), "PreparingForSleep": Variant("b", False)})
+            return reply(
+                {
+                    "PreparingForShutdown": Variant("b", self.preparing),
+                    "PreparingForSleep": Variant("b", False),
+                }
+            )
         if member == "GetActive":
             return reply(self.locked)
         if member == "Lock":
             self.locked = True
             return reply()
-        if member == "Get":       # systemd user environment
+        if member == "Get":  # systemd user environment
             return reply(["WAYLAND_DISPLAY=wayland-0"])
         return reply()
 
@@ -205,9 +238,16 @@ class Screen:
 def power(bus=None, screen=None, allowed=("suspend",), clock=None, **kwargs):
     bus = bus or Logind()
     ticks = iter(range(0, 1000))
-    return PowerManager(bus, bus, {"allowed_system_actions": list(allowed)}, runner=screen or Screen(),
-                        display_command="kscreen-doctor", delay=lambda _: asyncio.sleep(0),
-                        clock=clock or (lambda: next(ticks)), **kwargs)
+    return PowerManager(
+        bus,
+        bus,
+        {"allowed_system_actions": list(allowed)},
+        runner=screen or Screen(),
+        display_command="kscreen-doctor",
+        delay=lambda _: asyncio.sleep(0),
+        clock=clock or (lambda: next(ticks)),
+        **kwargs,
+    )
 
 
 def test_unknown_allowed_actions_are_a_configuration_error():
@@ -244,14 +284,22 @@ async def test_display_off_and_a_display_that_ignores_it():
     assert result["status"] == "accepted" and result["completion_confirmed"] is False
 
 
-@pytest.mark.parametrize("bus,allowed,action,code", [
-    (Logind(), ("suspend",), "hibernate", "unsupported"),
-    (Logind(), (), "suspend", "not_authorized"),
-    (Logind(can="challenge"), ("suspend",), "suspend", "authorization_required"),
-    (Logind(can="no"), ("suspend",), "suspend", "unsupported"),
-    (Logind(inhibitors=[["sleep", "Updater", "Installing", "block"]]), ("suspend",), "suspend", "inhibited"),
-    (Logind(preparing=True), ("shutdown",), "shutdown", "busy"),
-])
+@pytest.mark.parametrize(
+    "bus,allowed,action,code",
+    [
+        (Logind(), ("suspend",), "hibernate", "unsupported"),
+        (Logind(), (), "suspend", "not_authorized"),
+        (Logind(can="challenge"), ("suspend",), "suspend", "authorization_required"),
+        (Logind(can="no"), ("suspend",), "suspend", "unsupported"),
+        (
+            Logind(inhibitors=[["sleep", "Updater", "Installing", "block"]]),
+            ("suspend",),
+            "suspend",
+            "inhibited",
+        ),
+        (Logind(preparing=True), ("shutdown",), "shutdown", "busy"),
+    ],
+)
 async def test_system_actions_refused(bus, allowed, action, code):
     manager = power(bus, allowed=allowed)
     with pytest.raises(BridgeError) as raised:
@@ -284,16 +332,19 @@ async def test_lock_screen():
 
 async def test_prepare_for_sleep_signal_from_logind_only():
     from dbus_next import Message
+
     seen = []
     manager = power(changed=lambda: seen.append(manager.state["system_state"]))
     await manager.initialize()
 
     def signal_from(sender, value, member="PrepareForSleep"):
-        message = Message.new_signal("/org/freedesktop/login1", "org.freedesktop.login1.Manager", member, "b", [value])
+        message = Message.new_signal(
+            "/org/freedesktop/login1", "org.freedesktop.login1.Manager", member, "b", [value]
+        )
         message.sender = sender
         manager._signal(message)
 
-    signal_from(":1.66", True)                   # not logind
+    signal_from(":1.66", True)  # not logind
     signal_from(":1.2", True)
     signal_from(":1.2", False)
     signal_from(":1.2", True, member="PrepareForShutdown")
@@ -302,10 +353,12 @@ async def test_prepare_for_sleep_signal_from_logind_only():
 
 # --- bigscreen:// link opener -------------------------------------------------------------
 
+
 def link_config(tmp_path, http, token="a" * 48):
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"token": token, "device_id": "test-device", "host": "0.0.0.0",
-                                "port": http.server.port}))
+    path.write_text(
+        json.dumps({"token": token, "device_id": "test-device", "host": "0.0.0.0", "port": http.server.port})
+    )
     os.chmod(path, 0o600)
     return path
 
@@ -333,20 +386,28 @@ async def test_open_uri_the_bridge_refuses(bridge, tmp_path):
 
 def test_main_rejects_a_bad_link_and_notifies(monkeypatch, tmp_path, capsys):
     notified = []
-    monkeypatch.setattr("sys.argv", ["bigscreen-bridge-open", "https://example.com", "--notify",
-                                     "--config", str(tmp_path / "none.json")])
+    monkeypatch.setattr(
+        "sys.argv",
+        ["bigscreen-bridge-open", "https://example.com", "--notify", "--config", str(tmp_path / "none.json")],
+    )
     monkeypatch.setattr(open_link.shutil, "which", lambda name: "/usr/bin/notify-send")
     monkeypatch.setattr(open_link.subprocess, "run", lambda argv, check: notified.append(argv))
     with pytest.raises(SystemExit) as exited:
         open_link.main()
     assert exited.value.code == 1
     assert "bigscreen://" in capsys.readouterr().err
-    assert notified and notified[0][:3] == ["notify-send", "--app-name=Bigscreen Bridge", "Bigscreen link failed"]
+    assert notified and notified[0][:3] == [
+        "notify-send",
+        "--app-name=Bigscreen Bridge",
+        "Bigscreen link failed",
+    ]
 
 
 def test_main_without_a_config_says_so(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr("sys.argv", ["bigscreen-bridge-open", "bigscreen://couchside", "--config",
-                                     str(tmp_path / "missing.json")])
+    monkeypatch.setattr(
+        "sys.argv",
+        ["bigscreen-bridge-open", "bigscreen://couchside", "--config", str(tmp_path / "missing.json")],
+    )
     with pytest.raises(SystemExit):
         open_link.main()
     assert capsys.readouterr().err.strip()
@@ -363,6 +424,7 @@ def test_main_prints_the_result(monkeypatch, capsys):
 
 
 # --- the updater's real side effects -----------------------------------------------------
+
 
 class Served:
     """A local HTTP server answering each path with (status, body)."""
@@ -396,6 +458,7 @@ def served():
     def start(routes):
         servers.append(Served(routes))
         return servers[-1]
+
     yield start
     for s in servers:
         s.close()
@@ -414,7 +477,9 @@ def test_get_unreachable():
 
 
 def test_fetch_releases_shapes(served, monkeypatch):
-    server_ = served({"/list": (200, b'[{"tag_name": "v1"}]'), "/dict": (200, b"{}"), "/bad": (200, b"<html>")})
+    server_ = served(
+        {"/list": (200, b'[{"tag_name": "v1"}]'), "/dict": (200, b"{}"), "/bad": (200, b"<html>")}
+    )
     for path, expected in (("/list", [{"tag_name": "v1"}]), ("/dict", [])):
         monkeypatch.setattr(update, "RELEASES", server_.url + path)
         assert update.fetch_releases() == expected
@@ -433,9 +498,13 @@ def release_archive(tmp_path, version, script):
     name = f"bigscreen-bridge-{version}.tar.gz"
     (tmp_path / name).write_bytes(data.getvalue())
     (tmp_path / "SHA256SUMS").write_text(f"{hashlib.sha256(data.getvalue()).hexdigest()}  {name}\n")
-    return {"tag_name": f"v{version}", "assets": [
-        {"name": name, "browser_download_url": (tmp_path / name).as_uri()},
-        {"name": "SHA256SUMS", "browser_download_url": (tmp_path / "SHA256SUMS").as_uri()}]}
+    return {
+        "tag_name": f"v{version}",
+        "assets": [
+            {"name": name, "browser_download_url": (tmp_path / name).as_uri()},
+            {"name": "SHA256SUMS", "browser_download_url": (tmp_path / "SHA256SUMS").as_uri()},
+        ],
+    }
 
 
 def test_install_unpacks_and_runs_the_release_installer(tmp_path):
@@ -443,7 +512,7 @@ def test_install_unpacks_and_runs_the_release_installer(tmp_path):
     release = release_archive(tmp_path, "9.9.9", f"touch {marker}\n")
     update.make_install(tmp_path / "root")(release)
     assert marker.exists() and (tmp_path / "root/releases/9.9.9/scripts/install-tv.sh").exists()
-    update.make_install(tmp_path / "root")(release)              # the same release again replaces it
+    update.make_install(tmp_path / "root")(release)  # the same release again replaces it
     assert (tmp_path / "root/releases/9.9.9/scripts/install-tv.sh").exists()
 
 
@@ -508,6 +577,7 @@ def test_restart_asks_systemd(monkeypatch):
 
 # --- the service lifecycle ---------------------------------------------------------------
 
+
 async def test_process_and_launch_errors():
     assert await server.process("/bin/sh", "-c", "printf ' ok \n'") == "ok"
     with pytest.raises(BridgeError) as failed:
@@ -537,7 +607,9 @@ class LifecycleBus:
         # The bus daemon itself answers; no other service is running.
         if message.destination == "org.freedesktop.DBus" and message.member in ("AddMatch", "ListNames"):
             return reply([]) if message.member == "ListNames" else reply()
-        return SimpleNamespace(message_type=MessageType.ERROR, body=[], error_name="org.freedesktop.DBus.Error.ServiceUnknown")
+        return SimpleNamespace(
+            message_type=MessageType.ERROR, body=[], error_name="org.freedesktop.DBus.Error.ServiceUnknown"
+        )
 
     async def wait_for_disconnect(self):
         await self.gone.wait()
@@ -586,8 +658,17 @@ def lifecycle(monkeypatch, tmp_path, unused_tcp_port):
     monkeypatch.setattr(server, "Lights", Lights)
     monkeypatch.setattr(server, "advertise", no_advertising)
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"token": "a" * 48, "device_id": "test-device", "host": "127.0.0.1",
-                                  "port": unused_tcp_port, "monitor_path": str(tmp_path / "monitor.js")}))
+    config.write_text(
+        json.dumps(
+            {
+                "token": "a" * 48,
+                "device_id": "test-device",
+                "host": "127.0.0.1",
+                "port": unused_tcp_port,
+                "monitor_path": str(tmp_path / "monitor.js"),
+            }
+        )
+    )
     os.chmod(config, 0o600)
     made.config, made.port = config, unused_tcp_port
     return made
@@ -595,6 +676,7 @@ def lifecycle(monkeypatch, tmp_path, unused_tcp_port):
 
 async def until_healthy(port):
     import aiohttp
+
     async with aiohttp.ClientSession() as session:
         for _ in range(200):
             try:

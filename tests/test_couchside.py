@@ -7,16 +7,31 @@ from bigscreen_bridge.adapters import APPS, BridgeError
 from bigscreen_bridge.couchside import KINDS, CouchsideHook, validate_content
 
 
-@pytest.mark.parametrize("kind,value", [("track", "library://track/1"),
-    ("album", "spotify--abc://album/1"), ("artist", "library://artist/1"),
-    ("playlist", "library://playlist/1"), ("search", "Björk"), ("now_playing", "")])
+@pytest.mark.parametrize(
+    "kind,value",
+    [
+        ("track", "library://track/1"),
+        ("album", "spotify--abc://album/1"),
+        ("artist", "library://artist/1"),
+        ("playlist", "library://playlist/1"),
+        ("search", "Björk"),
+        ("now_playing", ""),
+    ],
+)
 def test_typed_content_validation(kind, value):
     assert validate_content(kind, value) == (kind, value)
 
 
-@pytest.mark.parametrize("kind,value", [("track", "library://album/1"),
-    ("track", "https://youtube.com/watch?v=a"), ("search", "a\n"),
-    ("search", "x" * 513), ("eval", "process.exit()")])
+@pytest.mark.parametrize(
+    "kind,value",
+    [
+        ("track", "library://album/1"),
+        ("track", "https://youtube.com/watch?v=a"),
+        ("search", "a\n"),
+        ("search", "x" * 513),
+        ("eval", "process.exit()"),
+    ],
+)
 def test_invalid_typed_content(kind, value):
     with pytest.raises(BridgeError):
         validate_content(kind, value)
@@ -25,10 +40,17 @@ def test_invalid_typed_content(kind, value):
 async def test_content_navigation_and_owner(bridge):
     b, _ = bridge
     state = {"view": {"type": "album", "id": "library://album/1"}, "ma_player_id": "ma-player"}
-    b.couchside = SimpleNamespace(enabled=True, state=state, refresh=AsyncMock(), navigate=AsyncMock(return_value=state))
+    b.couchside = SimpleNamespace(
+        enabled=True, state=state, refresh=AsyncMock(), navigate=AsyncMock(return_value=state)
+    )
     b.wm.windows = [{"id": "couchside-window", "desktop": APPS[0].flatpak}]
-    request = {"id": "request-1", "command": "open", "app": "couchside",
-               "content_type": "album", "content_id": "library://album/1"}
+    request = {
+        "id": "request-1",
+        "command": "open",
+        "app": "couchside",
+        "content_type": "album",
+        "content_id": "library://album/1",
+    }
     response = await b.execute(request)
     assert response["playback_owner"] == "music_assistant"
     b.couchside.navigate.assert_awaited_once_with("request-1", "album", "library://album/1")
@@ -42,8 +64,15 @@ async def test_unsupported_content_never_focuses(bridge):
     b, _ = bridge
     b.couchside = SimpleNamespace(enabled=True, state=None, refresh=AsyncMock())
     with pytest.raises(BridgeError):
-        await b.execute({"id": "bad", "command": "open", "app": "couchside",
-                         "content_type": "track", "content_id": "library://album/1"})
+        await b.execute(
+            {
+                "id": "bad",
+                "command": "open",
+                "app": "couchside",
+                "content_type": "track",
+                "content_id": "library://album/1",
+            }
+        )
     assert not b.wm.focused
 
 

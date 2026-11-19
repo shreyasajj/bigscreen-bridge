@@ -15,13 +15,27 @@ CHANNEL = "channel-" + "a" * 64
 
 def hook():
     return SimpleNamespace(
-        enabled=True, refresh=AsyncMock(),
-        state={"protocol": 1, "ready": True, "capabilities": ["pause", "stop"],
-               "media": {"state": "playing", "channel": {"id": CHANNEL, "name": "News",
-                         "current": {"title": "Current programme"}, "next": {"title": "Next programme"}}}},
+        enabled=True,
+        refresh=AsyncMock(),
+        state={
+            "protocol": 1,
+            "ready": True,
+            "capabilities": ["pause", "stop"],
+            "media": {
+                "state": "playing",
+                "channel": {
+                    "id": CHANNEL,
+                    "name": "News",
+                    "current": {"title": "Current programme"},
+                    "next": {"title": "Next programme"},
+                },
+            },
+        },
         open=AsyncMock(return_value={"delivery": "player_accepted"}),
         control=AsyncMock(return_value={"delivery": "player_accepted"}),
-        browse=AsyncMock(return_value={"items": [{"id": CHANNEL, "name": "News"}], "total": 1, "next_offset": None}),
+        browse=AsyncMock(
+            return_value={"items": [{"id": CHANNEL, "name": "News"}], "total": 1, "next_offset": None}
+        ),
     )
 
 
@@ -45,7 +59,9 @@ async def test_channel_open_browse_and_flags(bridge):
     app = next(a for a in b.snapshot()["apps"] if a["id"] == "flimmer")
     assert app["content_types"] == ["flimmer_channel"]
     assert app["capabilities"] == ["focus", "pause", "stop"]
-    await b.execute(dict(id="open", command="open", app="flimmer", content_type="channel", content_id=CHANNEL))
+    await b.execute(
+        dict(id="open", command="open", app="flimmer", content_type="channel", content_id=CHANNEL)
+    )
     b.flimmer.open.assert_awaited_once_with("open", CHANNEL)
     await b.execute(dict(id="pause", command="pause", app="flimmer"))
     b.flimmer.control.assert_awaited_once_with("pause", "pause")
@@ -72,8 +88,13 @@ async def test_native_entity_channel_metadata_and_paginated_browse(bridge):
     b, _ = bridge
     b.flimmer = hook()
     b.wm.windows = [{"id": "iptv", "desktop": APPS[2].flatpak, "active": True}]
-    coordinator = SimpleNamespace(data=b.snapshot(), last_update_success=True, config_entry=None,
-                                  async_contexts=lambda: (), command=AsyncMock())
+    coordinator = SimpleNamespace(
+        data=b.snapshot(),
+        last_update_success=True,
+        config_entry=None,
+        async_contexts=lambda: (),
+        command=AsyncMock(),
+    )
     active, app = BigscreenPlayer(coordinator), BigscreenPlayer(coordinator, "flimmer")
     assert active.state == app.state == MediaPlayerState.PLAYING
     assert app.media_title == "Current programme" and app.media_channel == "News"
@@ -103,8 +124,9 @@ async def test_native_entity_channel_metadata_and_paginated_browse(bridge):
 async def test_dbus_response_contract_and_disconnection():
     bus = SimpleNamespace(call=AsyncMock())
     native = FlimmerHook(bus)
-    bus.call.return_value = SimpleNamespace(message_type=MessageType.METHOD_RETURN,
-                                            body=[json.dumps({"id": "one", "ok": True, "result": {}})])
+    bus.call.return_value = SimpleNamespace(
+        message_type=MessageType.METHOD_RETURN, body=[json.dumps({"id": "one", "ok": True, "result": {}})]
+    )
     assert await native.request("get_state", "one") == {}
     sent = bus.call.call_args[0][0]
     assert sent.destination == "io.github.jclsn.Flimmer.Control"
@@ -119,7 +141,9 @@ async def test_invalid_catalogue_is_rejected():
     native = FlimmerHook(None, True)
     native.refresh = AsyncMock()
     native.state = {"ready": True}
-    native.request = AsyncMock(return_value={"items": [{"id": "https://provider/password", "name": "Bad"}], "next_offset": None})
+    native.request = AsyncMock(
+        return_value={"items": [{"id": "https://provider/password", "name": "Bad"}], "next_offset": None}
+    )
     with pytest.raises(BridgeError, match="Invalid Flimmer channel catalogue"):
         await native.browse()
     native.request.return_value = {"items": [{"id": CHANNEL, "name": "News"}], "next_offset": 0}
@@ -131,7 +155,9 @@ async def test_channel_open_waits_for_loading_catalogue():
     native = FlimmerHook(None, True)
     native.wait_ready = AsyncMock()
     native.refresh = AsyncMock()
-    native.request = AsyncMock(side_effect=[BridgeError("not_ready", "Loading"), {"delivery": "player_accepted"}])
+    native.request = AsyncMock(
+        side_effect=[BridgeError("not_ready", "Loading"), {"delivery": "player_accepted"}]
+    )
     assert await native.open("cold", CHANNEL) == {"delivery": "player_accepted"}
     assert native.request.await_count == 2
     native.request.assert_awaited_with("select_channel", "cold", channel_id=CHANNEL)

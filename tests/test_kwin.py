@@ -1,4 +1,5 @@
 """Loading scripts into KWin."""
+
 from pathlib import Path
 from types import SimpleNamespace
 

@@ -1,6 +1,8 @@
 """Stremio's native application control; its MQTT transport stays independent."""
+
 import math
 import re
+from typing import ClassVar
 
 from .adapters import BridgeError
 from .hooks import DBusHook
@@ -21,8 +23,11 @@ def validate_content(kind, value, resume=False):
     if not isinstance(resume, bool):
         raise BridgeError("invalid_request", "Resume must be boolean")
     if kind == "episode":
-        if (not isinstance(value, dict) or set(value) != {"series_id", "video_id"}
-                or not all(valid_id(v) for v in value.values())):
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"series_id", "video_id"}
+            or not all(valid_id(v) for v in value.values())
+        ):
             raise BridgeError("invalid_request", "Episode requires series_id and video_id")
     elif not valid_id(value):
         raise BridgeError("invalid_request", "Invalid Stremio ID")
@@ -31,8 +36,12 @@ def validate_content(kind, value, resume=False):
 
 def validate_seek(value):
     try:
-        valid = (not isinstance(value, bool) and isinstance(value, (float, int))
-                 and math.isfinite(value) and value >= 0)
+        valid = (
+            not isinstance(value, bool)
+            and isinstance(value, (float, int))
+            and math.isfinite(value)
+            and value >= 0
+        )
     except OverflowError:
         valid = False
     if not valid:
@@ -45,7 +54,7 @@ class StremioHook(DBusHook):
     kinds = KINDS
     bus_name = BUS_NAME
     object_path = OBJECT_PATH
-    timeouts = {"open": 25, "browse": 25}
+    timeouts: ClassVar[dict[str, float]] = {"open": 25, "browse": 25}
     require_result_object = False
 
     def check_item(self, kind, value):

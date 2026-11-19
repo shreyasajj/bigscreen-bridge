@@ -47,16 +47,11 @@ skip_covered = true
 line-length = 110
 
 [tool.ruff.lint]
-# Errors, pyflakes, whitespace, import order, likely bugs, outdated syntax, unused
-# noqa comments, and blocking calls in async code. Line length and formatting are
-# not enforced (the tree predates them).
-select = ["E4", "E7", "E9", "F", "W", "I", "B", "UP", "ASYNC", "RUF100"]
-# Home Assistant's own style takes timeout parameters; the polling loops are deliberate.
-ignore = ["ASYNC109", "ASYNC110"]
+# Errors, pyflakes, whitespace, import order, likely bugs, outdated syntax,
+# simplifications, Ruff's own checks and blocking calls in async code.
+# `ruff format --check` keeps the layout.
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "ASYNC"]
 
 [tool.ruff.lint.per-file-ignores]
-# Tests and one-off scripts may block inside a coroutine.
-"tests/**" = ["ASYNC"]
-"scripts/**" = ["ASYNC"]
 "bigscreen-bridge/src/bigscreen_bridge/kwin.py" = ["F821"] # D-Bus signature annotations
 "bigscreen-bridge/src/bigscreen_bridge/status.py" = ["F821"]

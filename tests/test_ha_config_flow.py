@@ -1,12 +1,13 @@
 """Config flow paths not covered by test_homeassistant.py: discovery, unreachable or
 misbehaving bridges, bad addresses and reauthentication, each ending in the right form error."""
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from custom_components.bigscreen_bridge.config_flow import ConfigFlow
 
-DEAD = "http://127.0.0.1:9"    # nothing listens on the discard port
+DEAD = "http://127.0.0.1:9"  # nothing listens on the discard port
 
 
 def flow(hass):
@@ -25,7 +26,9 @@ def flow(hass):
 def announcement(http, **properties):
     url = http.make_url("")
     props = {"device_id": "test-device", "protocol": "1", "name": "TV"} | properties
-    return SimpleNamespace(host=url.host, port=url.port, properties={k: v for k, v in props.items() if v is not None})
+    return SimpleNamespace(
+        host=url.host, port=url.port, properties={k: v for k, v in props.items() if v is not None}
+    )
 
 
 @pytest.mark.parametrize("properties", [{"device_id": None}, {"protocol": "2"}])
@@ -48,7 +51,9 @@ async def test_zeroconf_then_pair_creates_the_entry(coordinator, bridge):
     f = flow(coordinator.hass)
     form = await f.async_step_zeroconf(announcement(http, name="Living room"))
     assert form["step_id"] == "pair" and f.context["title_placeholders"] == {"name": "Living room"}
-    f._abort_if_unique_id_configured.assert_called_once_with(updates={"url": str(http.make_url("")).rstrip("/")})
+    f._abort_if_unique_id_configured.assert_called_once_with(
+        updates={"url": str(http.make_url("")).rstrip("/")}
+    )
     f.context["unique_id"] = "test-device"
     created = await f.async_step_pair({"code": "a" * 48})
     assert created["type"] == "create_entry" and created["data"]["token"] == "a" * 48
@@ -78,8 +83,9 @@ async def test_pair_step_bridge_gone(coordinator):
     assert (await f.async_step_pair({"code": "a" * 48}))["errors"]["base"] == "cannot_connect"
 
 
-@pytest.mark.parametrize("url,error", [("ftp://tv", "invalid_url"), ("http://tv/path", "invalid_url"),
-                                       (DEAD, "cannot_connect")])
+@pytest.mark.parametrize(
+    "url,error", [("ftp://tv", "invalid_url"), ("http://tv/path", "invalid_url"), (DEAD, "cannot_connect")]
+)
 async def test_user_step_address_errors(coordinator, url, error):
     f = flow(coordinator.hass)
     assert (await f.async_step_user({"url": url, "code": "a" * 48}))["errors"]["base"] == error
@@ -88,11 +94,14 @@ async def test_user_step_address_errors(coordinator, url, error):
 
 async def test_user_step_rate_limited_pairing(coordinator, bridge, tmp_path):
     from bigscreen_bridge.pairing import Pairing
+
     b, http = bridge
     b.pairing = Pairing(tmp_path / "clients.json")
     f = flow(coordinator.hass)
     url = str(http.make_url("")).rstrip("/")
-    errors = [(await f.async_step_user({"url": url, "code": "2222-2222"}))["errors"]["base"] for _ in range(21)]
+    errors = [
+        (await f.async_step_user({"url": url, "code": "2222-2222"}))["errors"]["base"] for _ in range(21)
+    ]
     assert errors[0] == "invalid_auth" and errors[-1] == "too_many_attempts"
 
 
@@ -104,7 +113,9 @@ async def test_reauth_accepts_a_new_token_for_the_same_device(coordinator):
     assert result == {"type": "abort", "data_updates": {"token": "a" * 48}}
 
 
-@pytest.mark.parametrize("url,code,error", [(None, "b" * 48, "invalid_auth"), (DEAD, "a" * 48, "cannot_connect")])
+@pytest.mark.parametrize(
+    "url,code,error", [(None, "b" * 48, "invalid_auth"), (DEAD, "a" * 48, "cannot_connect")]
+)
 async def test_reauth_errors(coordinator, url, code, error):
     f = flow(coordinator.hass)
     entry = SimpleNamespace(data={"url": url or coordinator.entry.data["url"]}, unique_id="test-device")
