@@ -61,16 +61,14 @@ wait_for 60 "bridge Status on the session bus" \
 
 step "install Couchside"
 as_tv 'flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo'
-# GitHub Pages, which hosts the Couchside repo, rate-limits the many small object fetches
-# (503, 429). Flatpak keeps what it already fetched, so back off and continue.
-delay=30
-for attempt in 1 2 3 4 5 6; do
-    as_tv 'flatpak info --user io.github.shreyasajj.Couchside >/dev/null 2>&1' && { echo "Couchside cached"; break; }
-    as_tv 'flatpak install --user -y --noninteractive https://shreyasajj.github.io/couchside/couchside.flatpakref' && break
-    [ "$attempt" -lt 6 ] || exit 1
-    echo "Couchside download failed (attempt $attempt); retrying in ${delay}s"; sleep "$delay"
-    delay=$((delay * 2))
-done
+# Couchside's release bundle: one file. (Its GitHub Pages repo is thousands of small
+# objects, which Pages rate-limits for CI runners.)
+bundle=https://github.com/shreyasajj/couchside/releases/latest/download/Couchside-x86_64.flatpak
+if ! as_tv 'flatpak info --user io.github.shreyasajj.Couchside >/dev/null 2>&1'; then
+    as_tv "curl -fsSL --retry 3 -o /tmp/couchside.flatpak $bundle && curl -fsSL --retry 3 $bundle.sha256 | sed 's|  .*|  /tmp/couchside.flatpak|' | sha256sum -c - && flatpak install --user -y --noninteractive --bundle /tmp/couchside.flatpak"
+else
+    echo "Couchside cached"
+fi
 
 step "open Couchside"
 as_tv 'systemd-run --user --collect --unit=couchside flatpak run io.github.shreyasajj.Couchside'
