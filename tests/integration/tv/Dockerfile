@@ -6,8 +6,11 @@
 # `plasma`: the KDE neon desktop libraries and shell, shared with the status-screen tests.
 FROM ubuntu:24.04 AS plasma
 ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
- && curl -fsSL https://archive.neon.kde.org/public.key | gpg --dearmor -o /usr/share/keyrings/neon.gpg \
+# The neon archive is often slow from runners: retry downloads rather than fail the build.
+RUN echo 'Acquire::Retries "5"; Acquire::http::Timeout "60";' > /etc/apt/apt.conf.d/80retries \
+ && apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+ && curl -fsSL --retry 5 --retry-all-errors --connect-timeout 30 -o /tmp/neon.key https://archive.neon.kde.org/public.key \
+ && gpg --dearmor -o /usr/share/keyrings/neon.gpg /tmp/neon.key && rm /tmp/neon.key \
  && echo "deb [signed-by=/usr/share/keyrings/neon.gpg] http://archive.neon.kde.org/user noble main" \
       > /etc/apt/sources.list.d/neon.list \
  && apt-get update && apt-get install -y --no-install-recommends \

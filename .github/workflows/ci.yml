@@ -122,7 +122,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Plasma image
         run: |
-          docker build -q --target plasma -t bigscreen-plasma tests/integration/tv
-          docker build -q -t bigscreen-status-test bigscreen-status/tests
+          docker build --progress=plain --target plasma -t bigscreen-plasma tests/integration/tv
+          docker build --progress=plain -t bigscreen-status-test bigscreen-status/tests
       - name: Press every key against a stand-in bridge
         run: docker run --rm -v "$PWD/bigscreen-status:/status:ro" bigscreen-status-test
